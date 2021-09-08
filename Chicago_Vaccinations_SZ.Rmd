@@ -48,6 +48,7 @@ library(tableone)
 library(Hmisc)
 library(weights)
 library(car)
+library(ggmap)
 knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE, fig.height = 5, fig.width = 9)
 options(tigris_use_cache = TRUE, tinytex.verbose = TRUE)
 ```
@@ -69,7 +70,7 @@ Data from the Chicago Department of Public Health (CDPH)
 * [Vaccine source data](https://data.cityofchicago.org/Health-Human-Services/COVID-19-Vaccinations-by-ZIP-Code/553k-3xzc) 
 * [Mortality source data](https://data.cityofchicago.org/Health-Human-Services/COVID-19-Cases-Tests-and-Deaths-by-ZIP-Code/yhhz-zm2v)
 * [Demographics in zip codes (U.S. Census Bureau, 2019 ACS 5-year estimates)](https://data.cityofchicago.org/Health-Human-Services/Chicago-Population-Counts/85cm-7uqa)
-* [More ZCTA demographics (U.S. Census Bureau, 2019 ACS 5-year estimates)](https://www.census.gov/acs/www/data/data-tables-and-tools/data-profiles/)
+* [More ZCTA demographics (U.S. Census Bureau, 2019 ACS 5-year estimates - Economic and Social Characteristics)](https://www.census.gov/acs/www/data/data-tables-and-tools/data-profiles/)
 
 Last updated at `r format(Sys.Date(),'%A, %B %d')` at `r format(Sys.time(), '%I:%M %p')` CST. 
 
@@ -223,9 +224,9 @@ phase_data <- data.frame(phase_labels, phases)
 pop_limit <- 10000
 
 # start of x-axis
-date_cutoff <- mdy("3/21/20")
+date_cutoff <- mdy("12/13/20")
 
-vaxdatecutoff <- mdy("12/13/20")
+secondwavepeak <- mdy("12/13/20")
 
 # date to group zip codes by, if grouping by only 1 date
 grouping_date <- mdy("3/28/21")
@@ -358,6 +359,7 @@ aesthetics <- list(
         legend.text = element_text(size = 12),
         legend.key.size = unit(1, "lines")))
 
+studyperiod <- paste(date_cutoff, max(to_graph$week_st), sep = "_")
 ```
 
 \newpage
@@ -455,16 +457,16 @@ tomap <- merged_df %>%
 
 vax_map <- ggplot() + 
     geom_sf(data = tomap, aes(geometry = geometry, fill = cumulative_pct_first)) +
-    geom_sf_text_repel(data = filter(tomap, population >= pop_limit),
-                               aes(label = zip, geometry = geometry), 
-                       size = 3, 
-                       # fontface = "bold",
-                       nudge_x = 0,
-                       nudge_y = 0,
-                       point.size = NA,
-                       box.padding = 0.1,
-                       min.segment.length = 0.1,
-                       max.overlaps = Inf) +
+    # geom_sf_text_repel(data = filter(tomap, population >= pop_limit),
+    #                            aes(label = zip, geometry = geometry), 
+    #                    size = 3, 
+    #                    # fontface = "bold",
+    #                    nudge_x = 0,
+    #                    nudge_y = 0,
+    #                    point.size = NA,
+    #                    box.padding = 0.1,
+    #                    min.segment.length = 0.1,
+    #                    max.overlaps = Inf) +
     theme_void() + coord_sf() + 
     scale_fill_distiller(trans = "reverse", limits = c(max(tomap$cumulative_pct_first), 0)) +
     scale_color_manual(values = mapcolorscustom) +
@@ -478,20 +480,20 @@ vax_map <- ggplot() +
 
 vax_map
 
-ggsave("vaxmap.png", vax_map, height = 7, width = 7)
+ggsave("vaxmapnolabels.png", vax_map, height = 7, width = 7)
 
 grouping_map <- ggplot() + 
     geom_sf(data = tomap, aes(geometry = geometry, fill = vax_group)) +
-    geom_sf_text_repel(data = filter(tomap, population > pop_limit), 
-                       aes(geometry = geometry, label = zip),
-                       size = 3, 
-                       # fontface = "bold",
-                       nudge_x = 0,
-                       nudge_y = 0,
-                       point.size = NA,
-                       box.padding = 0.1,
-                       min.segment.length = 0.1,
-                       max.overlaps = Inf) +
+    # geom_sf_text_repel(data = filter(tomap, population > pop_limit), 
+    #                    aes(geometry = geometry, label = zip),
+    #                    size = 3, 
+    #                    # fontface = "bold",
+    #                    nudge_x = 0,
+    #                    nudge_y = 0,
+    #                    point.size = NA,
+    #                    box.padding = 0.1,
+    #                    min.segment.length = 0.1,
+    #                    max.overlaps = Inf) +
     theme_void() + coord_sf() + 
     scale_fill_manual(values = mapcolorscustom) +
     labs(fill = group_legend, title = "Distribution of Vaccination Groups", color = "Vaccination Group") +
@@ -504,7 +506,7 @@ grouping_map <- ggplot() +
 
 grouping_map
 
-ggsave("groupingmap.png", grouping_map, height = 7, width = 7)
+ggsave("groupingmapnolabels.png", grouping_map, height = 7, width = 7)
 
 ```
 
@@ -693,7 +695,7 @@ save_kable(table1kab, "table1.html")
 cumulativevaxallzip <- groupsabbr %>%
   right_join(joined_df) %>%
   arrange(desc(vax_group)) %>%
-  filter(week_st >= vaxdatecutoff) %>%
+  filter(week_st >= secondwavepeak) %>%
   ggplot(aes(x = week_st, y = cumulative_pct_first)) +
   geom_vline(
     data = phase_data,
@@ -730,7 +732,7 @@ cumulativevaxallzip <- groupsabbr %>%
 
 cumulativevaxallzip
 
-ggsave("cumulativevaxallzip.png", cumulativevaxallzip, height = 6, width = 9)
+ggsave(paste0("cumulativevaxallzip", secondwavepeak, "_", max(to_graph$week_st), ".png"), cumulativevaxallzip, height = 6, width = 9)
 
 ```
 
@@ -738,7 +740,7 @@ ggsave("cumulativevaxallzip.png", cumulativevaxallzip, height = 6, width = 9)
 
 ```{r cumulative vax}
 
-vaxcumulative <- ggplot(data = filter(to_graph, week_st >= vaxdatecutoff), 
+vaxcumulative <- ggplot(data = to_graph, 
                         aes(x = week_st, y = cumulative_pct_first)) +
   aesthetics +
     theme(panel.grid.minor = element_blank(), panel.grid.major = element_blank(),
@@ -753,7 +755,7 @@ vaxcumulative <- ggplot(data = filter(to_graph, week_st >= vaxdatecutoff),
   scale_y_continuous(limits = c(0, 100)) +
   labs(x = "\nWeek", y = "% of Population with First Doses\n", linetype = "Distribution Phase")
 
-ggsave(paste0("vaccinationscumulative_", n_groups, "groups.png"), vaxcumulative, height = 6, width = 9)
+ggsave(paste0("cumulativevaxgrouped", studyperiod, ".png"), vaxcumulative, height = 6, width = 9)
 
 ```
 
@@ -761,13 +763,13 @@ ggsave(paste0("vaccinationscumulative_", n_groups, "groups.png"), vaxcumulative,
 
 ```{r weekly vax}
 
-vaxweekly <- ggplot(data = filter(to_graph, week_st >= vaxdatecutoff), aes(x = week_st, y = first_dose_weekly)) +
+vaxweekly <- ggplot(data = to_graph, aes(x = week_st, y = first_dose_weekly)) +
   aesthetics +
   labs(x = "Week", y = "Weekly First Doses/100,000 Population", title = "Trends in Weekly  Vaccination")
 
 vaxweekly
 
-ggsave(paste0("vaccinationsweekly_", n_groups, "groups.png"), vaxweekly, height = 5, width = 9)
+ggsave(paste0("weeklyvax", date_cutoff, "_", max(to_graph$week_st), ".png"), vaxweekly, height = 5, width = 9)
 
 ```
 
@@ -777,8 +779,11 @@ ggsave(paste0("vaccinationsweekly_", n_groups, "groups.png"), vaxweekly, height 
 
 ```{r cumulative mortality}
 mortalitycumulative <-
-  ggplot(data = to_graph, aes(x = week_st, y = deaths_cumulative)) +
+  ggplot(data = filter(to_graph, vax_group == n_labels[1] | vax_group == n_labels[3]), aes(x = week_st, y = deaths_cumulative)) +
   aesthetics +
+  scale_fill_manual(values = c(graphcolors[1], graphcolors[3])) +
+  scale_color_manual(values = c(graphcolors[1], graphcolors[3])) +
+  scale_shape_manual(values = c(graphshapes[1], graphshapes[3])) +
   labs(
     x = "\nWeek",
     y = "Deaths (per 100,000)\n") +
@@ -786,55 +791,26 @@ mortalitycumulative <-
 
 mortalitycumulative
 
-ggsave(paste0("mortalitycumulative_", n_groups, "groups.png"),
+ggsave(paste0("cumulativemortality", studyperiod, ".png"),
        mortalitycumulative,
        height = 5,
        width = 9)
 
 ```
 
-## Weekly mortality
-
-```{r weekly mortality}
-
-mortalityweekly <-
-  ggplot(data = to_graph, aes(x = week_st, y = death_rate_weekly)) +
-  aesthetics +
-  geom_linerange(aes(ymin = death_rate_weekly-deathratesd, ymax = death_rate_weekly+deathratesd, color = vax_group)) +
-  labs(
-    x = "Week",
-    y = "Weekly Mortality Rate (per 100,000)",
-    title = "Trends in Weekly COVID-19 Mortality Rate after Vaccination")
-
-mortalityweekly
-
-ggsave(paste0("mortalityweekly_", n_groups, "groups.png"),
-       mortalityweekly,
-       height = 5,
-       width = 9)
-```
-
-### Rolling average mortality
+## Rolling average mortality
 
 ```{r rolling average weekly mortality}
 
 rollingweeklymortality <-
   ggplot(data = to_graph, aes(x = week_st, y = mort_roll)) +
   aesthetics +
-  labs(x = "\nWeek", y = "Deaths per 100,000\n",
-    title = "Trends in Weekly COVID-19 Mortality Rate after Vaccination - Rolling Averages")
+  labs(x = "\nWeek", y = "Deaths (per 100,000)\n",
+    title = "Trends in COVID-19 Mortality Rate - 5 Week Rolling Averages")
 
 rollingweeklymortality
 
-ggsave(paste0(k, "wkrollingavg_weeklymortality_", n_groups, "groups.png"), rollingweeklymortality, height = 5, width = 9)
-
-mortrollsd <-   ggplot(data = to_graph, aes(x = week_st, y = mort_roll)) +
-  labs(x = "\nWeek", y = "Deaths per 100,000\n",
-       title = "Trends in Weekly COVID-19 Mortality Rate after Vaccination - Rolling Averages") +
-  aesthetics +
-geom_linerange(data = filter(to_graph, is.na(mort_roll) == FALSE), aes(ymin = death_rate_weekly-deathratesd, ymax = death_rate_weekly+deathratesd, color = vax_group))
-
-ggsave("mortrollsd.png", mortrollsd, height = 5, width = 9)
+ggsave(paste0("weeklymortality", studyperiod, ".png"), rollingweeklymortality, height = 5, width = 9)
 
 ```
 
@@ -864,20 +840,20 @@ tomapmortality <- groups %>%
 
 mortalitymap <- ggplot() + 
    geom_sf(data = tomapmortality, aes(geometry = geometry, fill = cumulative_deaths)) +
-    geom_sf_text_repel(data = filter(tomapmortality, population >= pop_limit),
-                               aes(label = zip, geometry = geometry), 
-                       size = 3, 
-                       # fontface = "bold",
-                       nudge_x = 0,
-                       nudge_y = 0,
-                       point.size = NA,
-                       box.padding = 0.1,
-                       min.segment.length = 0.1,
-                       max.overlaps = Inf) +
+    # geom_sf_text_repel(data = filter(tomapmortality, population >= pop_limit),
+    #                            aes(label = zip, geometry = geometry), 
+    #                    size = 3, 
+    #                    # fontface = "bold",
+    #                    nudge_x = 0,
+    #                    nudge_y = 0,
+    #                    point.size = NA,
+    #                    box.padding = 0.1,
+    #                    min.segment.length = 0.1,
+    #                    max.overlaps = Inf) +
     theme_void() + coord_sf() + 
     scale_fill_distiller(palette = "Reds", trans = "reverse") +
     scale_color_manual(values = mapcolorscustom) +
-    labs(fill = "Deaths during Third Wave", title = "Deaths During 3rd Wave") +
+    labs(fill = "Deaths", title = "Deaths During Spring Wave") +
     theme(legend.position = "right", 
         plot.title = element_text(hjust = 0.5),
         legend.title = element_text(size = 12, face = "bold"),
@@ -887,7 +863,7 @@ mortalitymap <- ggplot() +
 
 mortalitymap
 
-ggsave("thirdwavemortalitymap.png", mortalitymap, height = 7, width = 7)
+ggsave("springwavemortalitymapnolabels.png", mortalitymap, height = 7, width = 7)
 
 x <- tomapmortality$cumulative_deaths
 y <- tomapmortality$cumulative_pct_first
@@ -918,8 +894,8 @@ mortalitybar <- to_graph %>%
               fontface = "bold",
               size = 6) +
     scale_fill_manual(values = graphcolors) +
-    labs(y = "% of Deaths", x = "Wave", title = "Deaths during waves by vaccination group",
-         fill = "Vaccination Group") +
+    labs(y = "% of Deaths\n", x = "\nWave", title = "Deaths during waves by vaccination group",
+         fill = group_legend) +
   theme_bw() +
   scale_y_continuous(expand = c(0,0), limits = c(0, 62),
                      breaks = seq(0, 60, 10)) +
@@ -927,9 +903,9 @@ mortalitybar <- to_graph %>%
         panel.grid.major.y = element_line(color = "gray20")) +
   theme(axis.text=element_text(size=16, 
                                face = "bold"),
-        axis.title=element_text(size=16,
+        axis.title=element_text(size=18,
                                 face = "bold"),
-        legend.title = element_text(size = 14,
+        legend.title = element_text(size = 16,
                                     face = "bold"),
         legend.text = element_text(size = 14),
         legend.key.size = unit(2, "lines"))
@@ -945,25 +921,18 @@ ggsave("mortalitybar.png", mortalitybar, width = 12, height = 7)
 
 ```{r weekly new cases}
 
-newcases <- ggplot(data = to_graph, aes(x = week_st, y = case_rate_weekly)) +
-  aesthetics +
-  labs(x = "\nWeek", y = "Weekly Cases Rate (per 100,000)\n",
-    title = "Trends in COVID-19 Cases after Vaccination")
-
-ggsave(paste0("newcasesweekly_", n_groups, "groups.png"), newcases, height = 5, width = 9)
-
 newcasesroll <- to_graph %>%
   dplyr::group_by(vax_group) %>%
   mutate(caseroll = zoo::rollmean(case_rate_weekly, k, fill = NA)) %>%
   ungroup() %>%
   ggplot(aes(x = week_st, y = caseroll)) +
   aesthetics +
-  labs(x = "\nWeek", y = "New Cases per 100,000\n",
+  labs(x = "\nWeek", y = "New Cases (per 100,000)\n",
     title = "Trends in COVID-19 Cases after Vaccination")
 
 newcasesroll
 
-ggsave(paste0("newcasesroll_", n_groups, "groups.png"), newcasesroll, height = 5, width = 9)
+ggsave(paste0("weeklycases", studyperiod, ".png"), newcasesroll, height = 5, width = 9)
 ```
 
 # Difference-in-Difference
@@ -1040,52 +1009,20 @@ mortalitycumulativedid <- mortalitycumulative +
   geom_line(data = filter(to_did, vax_group == n_labels[1]), 
             aes(x = week_st, y = absdeaths_counterfactual, group = vax_group, color = "Counterfactual"), 
             linetype = "dashed") +
-  scale_fill_manual(values = c(graphcolors[2], graphcolors[3], graphcolors[1], "#FFFFFF")) +
-  scale_color_manual(values = c(graphcolors[2], graphcolors[3], graphcolors[1], "#FF0000")) +
-  scale_shape_manual(values = c(graphshapes[2], graphshapes[3], graphshapes[1], 1)) +
+  scale_fill_manual(values = c(graphcolors[3], graphcolors[1], "#FFFFFF")) +
+  scale_color_manual(values = c(graphcolors[3], graphcolors[1], "#FF0000")) +
+  scale_shape_manual(values = c(graphshapes[3], graphshapes[1], 1)) +
   labs(color = group_legend, fill = group_legend, shape = group_legend)
   
 mortalitycumulativedid
 
-ggsave(paste0("mortalitycumulativedid_", n_groups, "_groups.png"), mortalitycumulativedid, height = 5, width = 9)
+ggsave(paste0("didcumulativemortality", studyperiod, ".png"), mortalitycumulativedid, height = 5, width = 9)
 
 lowdid <- to_did %>%
   filter(week_st == thirdwave_end, vax_group == n_labels[1])
 lowdidlivessaved <- (lowdid$deaths_cumulative-lowdid$absdeaths_counterfactual)*lowdid$population/100000
 paste("Lives saved if lowest vaccinated zip codes experienced same trend as highly vaccinated:", lowdidlivessaved)
 
-```
-
-## Weekly mortality DID
-
-```{r weekly mortality DID}
-mortalityweeklydid <- mortalityweekly +
-  # filtered out counterfactuals for high group
-  geom_point(data = filter(to_did, vax_group == n_labels[1]), 
-             aes(x = week_st, y = absdeath_rate_weekly_counterfactual, 
-                 shape = vax_group), color = "red", size = 2, show.legend = FALSE) +
-  # filtered out counterfactuals for high group
-  geom_line(data = filter(to_did, vax_group == n_labels[1]), 
-            aes(x = week_st, y = absdeath_rate_weekly_counterfactual, group = vax_group),
-            color = "red", linetype = "dashed") +
-  geom_vline(xintercept = mean(DID_st$week_st), color = "red")
-
-# mortalityweeklydid
-
-ggsave(paste0("mortalityweeklydid_", n_groups, "_groups.png"), mortalityweeklydid, height = 5, width = 9)
-
-to_did_low <- to_did %>%
-  filter(vax_group == n_labels[1], week_st >= DID_stdate)
-
-# Estimated number of lives saved if low zip codes had gotten high vaccination level using area under curve
-# AUC(to_did_low$week, to_did_low$death_rate_weekly, method = "trapezoid") * (mean(to_did_low$population)/100000)
-# 
-# AUC(to_did_low$week, to_did_low$absdeath_rate_weekly_counterfactual, method = "trapezoid") * (mean(to_did_low$population)/100000)
-# 
-# to_did_high <- to_did %>%
-#   filter(vax_group == n_labels[n_groups], week_st >= DID_stdate)
-# 
-# AUC(to_did_high$week, to_did_high$death_rate_weekly, method = "trapezoid") * (mean(to_did_high$population)/100000)
 ```
 
 ### DID with rolling average of weekly mortality
@@ -1095,16 +1032,14 @@ rollingmortdid <- rollingweeklymortality +
   # filtered out counterfactuals for high group
   geom_point(data = filter(to_did, vax_group == n_labels[1]), 
              aes(x = week_st, y = abs_wkroll_counterfactual, 
-                 shape = vax_group), color = "red", size = 2, show.legend = FALSE) +
+                 shape = vax_group), color = "red", size = 3, show.legend = FALSE) +
   # filtered out counterfactuals for high group
   geom_line(data = filter(to_did, vax_group == n_labels[1]), 
             aes(x = week_st, y = abs_wkroll_counterfactual, group = vax_group),
             color = "red", linetype = "dashed") +
   geom_vline(xintercept = mean(DID_st$week_st), color = "red")
 
-# rollingmortdid
-
-ggsave(paste0("rollingavgmortdid_", n_groups, "_groups.png"), rollingmortdid, height = 5, width = 9)
+ggsave(paste0("didweeklymortality", studyperiod, ".png"), rollingmortdid, height = 5, width = 9)
 ```
 
 # Model Fitting
@@ -1117,7 +1052,7 @@ $log(Y_i)-log(pop_i)=\beta_{0i}+\beta_{1i}week+\beta_2wave+\beta_3wave*vaxleveld
 
 # Run Chicago_Vaccinations_SZ.Rmd to line 175 before running this file to import and clean data
 
-start <- vaxdatecutoff
+start <- secondwavepeak
 chngwave <- thirdwave_st
 end <- mdy("6/14/21")
 
@@ -1205,7 +1140,6 @@ $log(Y_i)-log(pop_i)=\beta_{0i}+\beta_{1i}week+\beta_2wave+\beta_3wave*vaxleveld
 ```{r model 2 recovered and aging and IRRS}
 
 # not sure how to account for people who were recovered + vaccinated
-# overfitting?
 
 model2 <- glmer(data = model1df, deaths_weekly ~ (1|zip) + week + wave + wave:vaxleveldec + recoveredleveldec + dec65plus + offset(log(population)), family = poisson(link = "log"))
 
@@ -1255,7 +1189,7 @@ paralleltrendtest <- glm(data = filter(model1df, wave == 0), deaths_weekly ~ wee
 
 summary(paralleltrendtest)
 
-linearHypothesis(paralleltrendtest, c("week:vax_group[17.9,28.4] = 0", "week:vax_group(28.4,38.9]"))
+linearHypothesis(paralleltrendtest, c("week:vax_group[17.8,28.3] = 0", "week:vax_group(28.3,38.8]"))
 
 ```
 
@@ -1326,17 +1260,3 @@ test <- model1df %>%
 
 test$deaths_wave[1]
 ```
-
-```{r waves, eval = FALSE}
-
-test <- joined_df %>%
-  dplyr::group_by(week_st) %>%
-  filter(population > pop_limit) %>%
-  summarise(deaths_weekly = sum(deaths_weekly), population = sum(population))
-
-ggplot(test) +
-  geom_point(aes(x = week_st, y = deaths_weekly)) +
-  scale_x_date(date_breaks = "1 month", guide = guide_axis(angle = 45))
-
-```
-
