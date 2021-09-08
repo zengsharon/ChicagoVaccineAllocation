@@ -457,16 +457,16 @@ tomap <- merged_df %>%
 
 vax_map <- ggplot() + 
     geom_sf(data = tomap, aes(geometry = geometry, fill = cumulative_pct_first)) +
-    # geom_sf_text_repel(data = filter(tomap, population >= pop_limit),
-    #                            aes(label = zip, geometry = geometry), 
-    #                    size = 3, 
-    #                    # fontface = "bold",
-    #                    nudge_x = 0,
-    #                    nudge_y = 0,
-    #                    point.size = NA,
-    #                    box.padding = 0.1,
-    #                    min.segment.length = 0.1,
-    #                    max.overlaps = Inf) +
+    geom_sf_text_repel(data = filter(tomap, population >= pop_limit),
+                               aes(label = zip, geometry = geometry),
+                       size = 3,
+                       # fontface = "bold",
+                       nudge_x = 0,
+                       nudge_y = 0,
+                       point.size = NA,
+                       box.padding = 0.1,
+                       min.segment.length = 0.1,
+                       max.overlaps = Inf) +
     theme_void() + coord_sf() + 
     scale_fill_distiller(trans = "reverse", limits = c(max(tomap$cumulative_pct_first), 0)) +
     scale_color_manual(values = mapcolorscustom) +
@@ -480,20 +480,20 @@ vax_map <- ggplot() +
 
 vax_map
 
-ggsave("vaxmapnolabels.png", vax_map, height = 7, width = 7)
+ggsave("vaxmap.png", vax_map, height = 7, width = 7)
 
 grouping_map <- ggplot() + 
     geom_sf(data = tomap, aes(geometry = geometry, fill = vax_group)) +
-    # geom_sf_text_repel(data = filter(tomap, population > pop_limit), 
-    #                    aes(geometry = geometry, label = zip),
-    #                    size = 3, 
-    #                    # fontface = "bold",
-    #                    nudge_x = 0,
-    #                    nudge_y = 0,
-    #                    point.size = NA,
-    #                    box.padding = 0.1,
-    #                    min.segment.length = 0.1,
-    #                    max.overlaps = Inf) +
+    geom_sf_text_repel(data = filter(tomap, population > pop_limit),
+                       aes(geometry = geometry, label = zip),
+                       size = 3,
+                       # fontface = "bold",
+                       nudge_x = 0,
+                       nudge_y = 0,
+                       point.size = NA,
+                       box.padding = 0.1,
+                       min.segment.length = 0.1,
+                       max.overlaps = Inf) +
     theme_void() + coord_sf() + 
     scale_fill_manual(values = mapcolorscustom) +
     labs(fill = group_legend, title = "Distribution of Vaccination Groups", color = "Vaccination Group") +
@@ -506,7 +506,7 @@ grouping_map <- ggplot() +
 
 grouping_map
 
-ggsave("groupingmapnolabels.png", grouping_map, height = 7, width = 7)
+ggsave("groupingmap.png", grouping_map, height = 7, width = 7)
 
 ```
 
@@ -840,20 +840,20 @@ tomapmortality <- groups %>%
 
 mortalitymap <- ggplot() + 
    geom_sf(data = tomapmortality, aes(geometry = geometry, fill = cumulative_deaths)) +
-    # geom_sf_text_repel(data = filter(tomapmortality, population >= pop_limit),
-    #                            aes(label = zip, geometry = geometry), 
-    #                    size = 3, 
-    #                    # fontface = "bold",
-    #                    nudge_x = 0,
-    #                    nudge_y = 0,
-    #                    point.size = NA,
-    #                    box.padding = 0.1,
-    #                    min.segment.length = 0.1,
-    #                    max.overlaps = Inf) +
+    geom_sf_text_repel(data = filter(tomapmortality, population >= pop_limit),
+                               aes(label = zip, geometry = geometry),
+                       size = 3,
+                       # fontface = "bold",
+                       nudge_x = 0,
+                       nudge_y = 0,
+                       point.size = NA,
+                       box.padding = 0.1,
+                       min.segment.length = 0.1,
+                       max.overlaps = Inf) +
     theme_void() + coord_sf() + 
     scale_fill_distiller(palette = "Reds", trans = "reverse") +
     scale_color_manual(values = mapcolorscustom) +
-    labs(fill = "Deaths", title = "Deaths During Spring Wave") +
+    labs(fill = "Deaths during Spring Wave", title = "Deaths During Spring Wave") +
     theme(legend.position = "right", 
         plot.title = element_text(hjust = 0.5),
         legend.title = element_text(size = 12, face = "bold"),
@@ -863,7 +863,7 @@ mortalitymap <- ggplot() +
 
 mortalitymap
 
-ggsave("springwavemortalitymapnolabels.png", mortalitymap, height = 7, width = 7)
+ggsave("springwavemortalitymap.png", mortalitymap, height = 7, width = 7)
 
 x <- tomapmortality$cumulative_deaths
 y <- tomapmortality$cumulative_pct_first
@@ -1077,7 +1077,7 @@ age_by_zip <- demo_by_zip %>%
   filter(population >= pop_limit) %>%
   dplyr::select(zip, dec65plus)
 
-model1df <- joined_df %>%
+mixedeffectsdf <- joined_df %>%
   filter(week_st >= start, population >= pop_limit) %>%
   # reindex weeks to be since beginning of 3rd wave
   mutate(week = week-min(week),
@@ -1097,19 +1097,31 @@ model1df <- joined_df %>%
   left_join(groupsabbr) %>%
   mutate(vax_group = relevel(vax_group , ref = n_labels[n_groups]))
 
-write.csv(model1df, "model1df.csv")
+write.csv(mixedeffectsdf, "mixedeffectsdf.csv")
 
 ```
 
-```{r model 1 the og}
+```{r model 1 parallel slope test}
+
+model1 <- glm(data = filter(mixedeffectsdf, wave == 0), deaths_weekly ~ week*vax_group + offset(log(population)), family = poisson(link = "log"))
+
+summary(model1)
+
+linearHypothesis(model1, c("week:vax_group[17.8,28.3] = 0", "week:vax_group(28.3,38.8]"))
+
+```
+
+## Model 2
+
+```{r model 2 mixed effects}
 # Random effects on intercept from zip and week
-model1 <- glmer(data = model1df, deaths_weekly ~ (1 + week|zip) + week + wave + wave:vaxleveldec + offset(log(population)), family = poisson(link = "log"))
+model2 <- glmer(data = mixedeffectsdf, deaths_weekly ~ (1 + week|zip) + week + wave + wave:vaxleveldec + offset(log(population)), family = poisson(link = "log"))
 
-model1
+model2
 
-model1noslope <- glmer(data = model1df, deaths_weekly ~ (1|zip) + week + wave + wave:vaxleveldec + offset(log(population)), family = poisson(link = "log"))
+model2noslope <- glmer(data = mixedeffectsdf, deaths_weekly ~ (1|zip) + week + wave + wave:vaxleveldec + offset(log(population)), family = poisson(link = "log"))
 
-model1noslope
+model2noslope
 
 # Mixed-Effects Model Visualization
 # ggpredict(model1, terms = c("wave", "zip"), type = "random") %>%
@@ -1123,99 +1135,79 @@ model1noslope
 
 ```
 
-Model 1b: 6-week lag on vaccination effect
-
-```{r model1b vax level 6 weeks prior}
-
-model1b <- glmer(data = model1df, deaths_weekly ~ (1|zip) + week + wave + wave:vaxleveldeclag + offset(log(population)), family = poisson(link = "log"))
-
-model1b
-
-```
-
-## Model 2:
-
-$log(Y_i)-log(pop_i)=\beta_{0i}+\beta_{1i}week+\beta_2wave+\beta_3wave*vaxleveldec+\beta_4recoveredleveldec+\beta_5dec65plus$
-
-```{r model 2 recovered and aging and IRRS}
-
-# not sure how to account for people who were recovered + vaccinated
-
-model2 <- glmer(data = model1df, deaths_weekly ~ (1|zip) + week + wave + wave:vaxleveldec + recoveredleveldec + dec65plus + offset(log(population)), family = poisson(link = "log"))
-
-model2
-
-# Wave IRR with median values
-
-paste("Wave IRR with median vaccination level (Model 1 no slope):", exp(fixef(model1noslope)[3] + 
-      fixef(model1noslope)[4]*mean(vaxlevel$vaxleveldec)))
-
-paste("Wave IRR with median vaccination level (Model 2):", exp(fixef(model2)[3] + 
-      fixef(model2)[6]*mean(vaxlevel$vaxleveldec)))
-
-# Week IRR with median values
-
-paste("Week IRR with median vaccination level (Model 1 no slope):", exp(fixef(model1noslope)[2] + 
-      fixef(model1noslope)[4]*mean(vaxlevel$vaxleveldec)))
-
-paste("Week IRR with median vaccination level (Model 2):", exp(fixef(model2)[2] + 
-      fixef(model2)[6]*mean(vaxlevel$vaxleveldec)))
-
-```
-
 Model 2b: 6-week lag on vaccination effect
 
-```{r model 2b 6wk lagged vax effect}
+```{r model2b vax level 6 weeks prior}
 
-model2b <- glmer(data = model1df, deaths_weekly ~ (1|zip) + week + wave + wave:vaxleveldeclag + recoveredleveldec + dec65plus + offset(log(population)), family = poisson(link = "log"))
+model2b <- glmer(data = mixedeffectsdf, deaths_weekly ~ (1|zip) + week + wave + wave:vaxleveldeclag + offset(log(population)), family = poisson(link = "log"))
 
 model2b
 
 ```
 
-Model 2c: 
+## Model 3:
 
-```{r model1c vax level groups}
+$log(Y_i)-log(pop_i)=\beta_{0i}+\beta_{1i}week+\beta_2wave+\beta_3wave*vaxleveldec+\beta_4recoveredleveldec+\beta_5dec65plus$
 
-model2c <- glmer(data = model1df, deaths_weekly ~ (1|zip) + week + wave + wave:vax_group + recoveredleveldec + dec65plus + offset(log(population)), family = poisson(link = "log"))
+```{r model 3 recovered and aging and IRRS}
 
-model2c
+# not sure how to account for people who were recovered + vaccinated
+
+model3 <- glmer(data = mixedeffectsdf, deaths_weekly ~ (1|zip) + week + wave + wave:vaxleveldec + recoveredleveldec + dec65plus + offset(log(population)), family = poisson(link = "log"))
+
+model3
+
+# Wave IRR with mean values
+
+paste("Wave IRR with mean vaccination level (Model 2 no slope):", exp(fixef(model2noslope)[3] + 
+      fixef(model2noslope)[4]*mean(vaxlevel$vaxleveldec)))
+
+paste("Wave IRR with mean vaccination level (Model 3):", exp(fixef(model3)[3] + 
+      fixef(model3)[6]*mean(vaxlevel$vaxleveldec)))
+
+# Week IRR with median values
+
+paste("Week IRR with mean vaccination level (Model 2 no slope):", exp(fixef(model2noslope)[2] + 
+      fixef(model2noslope)[4]*mean(vaxlevel$vaxleveldec)))
+
+paste("Week IRR with mean vaccination level (Model 3):", exp(fixef(model3)[2] + 
+      fixef(model3)[6]*mean(vaxlevel$vaxleveldec)))
 
 ```
 
-```{r parallel slope test}
+Model 3b: 
 
-paralleltrendtest <- glm(data = filter(model1df, wave == 0), deaths_weekly ~ week*vax_group + offset(log(population)), family = poisson(link = "log"))
+```{r model3c vax level groups}
 
-summary(paralleltrendtest)
+model3b <- glmer(data = mixedeffectsdf, deaths_weekly ~ (1|zip) + week + wave + wave:vax_group + recoveredleveldec + dec65plus + offset(log(population)), family = poisson(link = "log"))
 
-linearHypothesis(paralleltrendtest, c("week:vax_group[17.8,28.3] = 0", "week:vax_group(28.3,38.8]"))
+model3b
 
 ```
 
 IRRs
 ```{r tab model}
 
-tab_model(model1noslope, model2,
+tab_model(model2noslope, model3,
 title = "Table 2: Multivariable analysis of risk reduction in deaths from COVID-19, by vaccinations before third wave")
 
-model1noslope
+model2noslope
 
 ```
 
 vaxleveldec = 10% increase in people with first doses out of entire population; recoveredleveldec = 10% increase in recovered from COVID-19 out of entire population; dec65plus = 10% increase in people over 65 years old out of entire population
 
-```{r model 2 did}
+```{r model 3 did}
 
-diddata <- model1df %>% 
+diddata <- mixedeffectsdf %>% 
   arrange(vaxleveldec) %>%
   mutate(vaxleveldec = rev(vaxleveldec))
 
-didsim <- simulate(model2, newdata = diddata)
+didsim <- simulate(model3, newdata = diddata)
 
 diddata <- cbind(diddata, didsim)
 
-model2did <- groups %>%
+model3did <- groups %>%
   dplyr::group_by(vax_group) %>%
   mutate(group_pop = sum(population)) %>%
   ungroup() %>%
@@ -1232,7 +1224,7 @@ model2did <- groups %>%
   mutate(rollingavgdeathrate = zoo::rollmean(death_rate_weekly, k, fill = NA)) %>%
   ungroup()
 
-model2didplot <- ggplot(data = model2did) +
+model3didplot <- ggplot(data = model3did) +
   geom_line(aes(x = week, y = rollingavgdeathrate, color = vax_group), alpha = 0.5) +
   geom_point(aes(x = week, y = diddeath_rate_weekly, fill = vax_group, shape = vax_group), size = 3) +
   scale_fill_manual(values = graphcolors) +
@@ -1242,7 +1234,7 @@ model2didplot <- ggplot(data = model2did) +
   labs(title = "DID with model 2", paste("Predicted values from flipped", group_legend), color = group_legend, fill = paste("Predicted values from flipped", group_legend),
        y = "Weekly Mortality Rate (per 100,000 population)", x = "Weeks since 10/24/20")
 
-model2didplot
+model3didplot
 
 # Lives saved under flipped allocation before 3rd wave
 
@@ -1254,7 +1246,7 @@ sim_1 <- diddata %>%
 # Estimated number of deaths if low zip codes had gotten high vaccination level using area under curve
 AUC(sim_1$week, sim_1$sim_1, method = "trapezoid")
 
-test <- model1df %>%
+test <- mixedeffectsdf %>%
   filter(week == max(week), wave == 1) %>%
   mutate(deaths_wave = sum(deaths_wave))
 
