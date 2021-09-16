@@ -87,7 +87,7 @@ demo_by_zip <- read_csv("https://data.cityofchicago.org/api/views/85cm-7uqa/rows
 ```{r covid data}
 covid_by_zip <-
   read_csv(
-    "https://data.cityofchicago.org/api/views/yhhz-zm2v/rows.csv?accessType=DOWNLOAD"
+    "COVID-19_Cases_Tests__and_Deaths_by_ZIP_Code_090821.csv"
   ) %>%
   mutate(
     zip = as.character(`ZIP Code`),
@@ -121,7 +121,7 @@ covid_by_zip <- demo_by_zip %>%
 
 ```{r vaccination data}
 vax_by_zip <-
-  read_csv("https://data.cityofchicago.org/api/views/553k-3xzc/rows.csv?accessType=DOWNLOAD") %>%
+  read_csv("COVID-19_Vaccinations_by_ZIP_Code_090821.csv") %>%
   mutate(zip = as.character(`Zip Code`),
          date = mdy(Date)) %>%
   mutate(week_st = floor_date(date, unit = "weeks", week_start = 7)) %>%
@@ -253,7 +253,14 @@ n_groups <- 3
 tocluster <- joined_df %>%
   filter(week_st == grouping_date, population > pop_limit) %>%
   dplyr::select(zip, cumulative_pct_first) %>%
-  mutate(vax_group = cut_interval(cumulative_pct_first, n_groups))
+  mutate(vax_group = case_when(
+    cumulative_pct_first < 27.6 ~ "[17.8, 26.9]",
+    cumulative_pct_first >= 39.9 ~ "[39.9, 49.3]",
+    TRUE ~ "[27.6, 39.4]")) %>%
+  mutate(vax_group = factor(vax_group, 
+                            levels = c("[17.8, 26.9]", 
+                                       "[27.6, 39.4]", 
+                                       "[39.9, 49.3]")))
 
 n_labels <- levels(tocluster$vax_group)
 
@@ -271,6 +278,10 @@ groups <- joined_df %>%
 
 groupsabbr <- groups %>%
   dplyr::select(vax_group, zip)
+
+groups %>%
+  dplyr::group_by(vax_group) %>%
+  dplyr::summarise(population = sum(population))
 
 ```
 
@@ -566,6 +577,22 @@ colnames(economics_social_merged) <- colnames(economics_social_merged) %>%
   str_replace_all("Population - Age", "% Age") %>%
   str_replace_all("Population -", "%")
 
+citywidenum <- economics_social_by_zip %>%
+  dplyr::summarise(across(`Population - Age 0-17`:`Population - Other Race Non-Latinx`, sum),
+                   healthinsurance = sum(healthinsuranceest),
+                   highschool = sum(highschoolest))
+
+citywidepct <- economics_social_merged %>%
+  mutate_at(vars(starts_with("%")), 
+                 list(~ weighted.mean(., population))) %>%
+  mutate(IQR = round(IQR(`Median Household Income ($)`), 0),
+         `Median Household Income ($)` = 
+           round(weighted.median(`Median Household Income ($)`, w = population), 0)) %>%
+  mutate(across(starts_with("%"), round)) %>%
+  mutate(population = sum(population)) %>%
+  dplyr::select(-c(Year, zip, vax_group)) %>%
+  unique()
+
 table1num <- economics_social_by_zip %>%
   dplyr::group_by(vax_group) %>%
   dplyr::summarise(across(`Population - Age 0-17`:`Population - Other Race Non-Latinx`, sum),
@@ -786,7 +813,7 @@ mortalitycumulative <-
   labs(
     x = "\nWeek",
     y = "Deaths (per 100,000)\n") +
-  scale_y_continuous(limits = c(0, 250))
+  scale_y_continuous(limits = c(0, 260))
 
 mortalitycumulative
 
@@ -879,7 +906,7 @@ wtd.cor(x, y, w)
 mortalitybar <- to_graph %>%
   mutate(wave = case_when(week_st >= date_cutoff & week_st < secondwave_st ~ 1,
                           week_st >= secondwave_st & week_st < thirdwave_st ~ 2,
-                          week_st >= thirdwave_st & week_st < thirdwave_end ~ 3)) %>%
+                          week_st >= thirdwave_st & week_st <= thirdwave_end ~ 3)) %>%
   filter(is.na(wave) == FALSE) %>%
   dplyr::group_by(vax_group, wave) %>%
   dplyr::summarise(cumulative_deaths_abs = sum(death_rate_weekly*population/100000)) %>%
@@ -893,11 +920,11 @@ mortalitybar <- to_graph %>%
               fontface = "bold",
               size = 6) +
     scale_fill_manual(values = graphcolors) +
-    labs(y = "% of Deaths\n", x = "\nWave", title = "Deaths during waves by vaccination group",
+    labs(y = "% of Deaths\n", x = "\nWave", title = "Deaths during waves by vaccination group\n",
          fill = group_legend) +
   theme_bw() +
-  scale_y_continuous(expand = c(0,0), limits = c(0, 62),
-                     breaks = seq(0, 60, 10)) +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 70),
+                     breaks = seq(0, 70, 10)) +
   theme(panel.grid.minor = element_blank(), panel.grid.major.x = element_blank(), 
         panel.grid.major.y = element_line(color = "gray20")) +
   theme(axis.text=element_text(size=16, 
@@ -906,7 +933,7 @@ mortalitybar <- to_graph %>%
                                 face = "bold"),
         legend.title = element_text(size = 16,
                                     face = "bold"),
-        legend.text = element_text(size = 14),
+        legend.text = element_text(size = 16),
         legend.key.size = unit(2, "lines"))
 
 mortalitybar
@@ -1008,9 +1035,9 @@ mortalitycumulativedid <- mortalitycumulative +
   geom_line(data = filter(to_did, vax_group == n_labels[1]), 
             aes(x = week_st, y = absdeaths_counterfactual, group = vax_group, color = "Counterfactual"), 
             linetype = "dashed") +
-  scale_fill_manual(values = c(graphcolors[3], graphcolors[1], "#FFFFFF")) +
-  scale_color_manual(values = c(graphcolors[3], graphcolors[1], "#FF0000")) +
-  scale_shape_manual(values = c(graphshapes[3], graphshapes[1], 1)) +
+  scale_fill_manual(values = c(graphcolors[1], graphcolors[3], "#FFFFFF")) +
+  scale_color_manual(values = c(graphcolors[1], graphcolors[3], "#FF0000")) +
+  scale_shape_manual(values = c(graphshapes[1], graphshapes[3], 1)) +
   labs(color = group_legend, fill = group_legend, shape = group_legend)
   
 mortalitycumulativedid
@@ -1066,9 +1093,10 @@ grouping_date <- mdy("3/28/21")
 vaxlevel <- joined_df %>%
   filter(week_st == grouping_date, population >= pop_limit) %>%
   # deciles 
-  mutate(vaxleveldec = cumulative_pct_first / 10, 
+  mutate(vaxleveldec = cumulative_pct_first / 10,
+         completeleveldec = cumulative_pct_complete / 10,
          recoveredleveldec = (cases_cumulative - deaths_cumulative)/population * 10) %>%
-  dplyr::select(zip, population, vaxleveldec, recoveredleveldec)
+  dplyr::select(zip, population, vaxleveldec, recoveredleveldec, completeleveldec)
 
 age_by_zip <- demo_by_zip %>%
   rename(pop65plus = `Population - Age 65+`) %>%
@@ -1106,7 +1134,7 @@ model1 <- glm(data = filter(mixedeffectsdf, wave == 0), deaths_weekly ~ week*vax
 
 summary(model1)
 
-linearHypothesis(model1, c("week:vax_group[17.8,28.3] = 0", "week:vax_group(28.3,38.8]"))
+linearHypothesis(model1, c("week:vax_group[17.8, 26.9] = 0", "week:vax_group[27.6, 39.4] = 0"))
 
 ```
 
@@ -1192,9 +1220,31 @@ title = "Table 2: Multivariable analysis of risk reduction in deaths from COVID-
 
 model2noslope
 
+paste("Wave IRR with mean vaccination level (Model 3c groups):", (exp(fixef(model3b)[3] + 
+      fixef(model3b)[7])))
+
+paste("Week IRR with mean vaccination level (Model 3):", exp(fixef(model3)[2] + 
+      fixef(model3)[6]*mean(vaxlevel$vaxleveldec)))
+
 ```
 
 vaxleveldec = 10% increase in people with first doses out of entire population; recoveredleveldec = 10% increase in recovered from COVID-19 out of entire population; dec65plus = 10% increase in people over 65 years old out of entire population
+
+```{r model 4 complete vax}
+
+model4 <- glmer(data = mixedeffectsdf, deaths_weekly ~ (1|zip) + week + wave + wave:completeleveldec + recoveredleveldec + dec65plus + offset(log(population)), family = poisson(link = "log"))
+
+summary(model4)
+
+paste("Wave IRR with mean vaccination level (Model 4):", exp(fixef(model3)[3] + 
+      fixef(model3)[6]*mean(vaxlevel$completeleveldec)))
+
+# Week IRR with median values
+
+paste("Week IRR with mean vaccination level (Model 4):", exp(fixef(model4)[2] + 
+      fixef(model4)[6]*mean(vaxlevel$completeleveldec)))
+```
+
 
 ```{r model 3 did}
 
