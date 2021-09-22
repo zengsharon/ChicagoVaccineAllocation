@@ -223,7 +223,7 @@ phase_data <- data.frame(phase_labels, phases)
 pop_limit <- 10000
 
 # start of x-axis
-date_cutoff <- mdy("12/13/20")
+date_cutoff <- mdy("8/9/20")
 
 secondwavepeak <- mdy("12/13/20")
 
@@ -253,14 +253,17 @@ n_groups <- 3
 tocluster <- joined_df %>%
   filter(week_st == grouping_date, population > pop_limit) %>%
   dplyr::select(zip, cumulative_pct_first) %>%
+  arrange(cumulative_pct_first) %>%
+  mutate(rank = row_number()) %>%
   mutate(vax_group = case_when(
-    cumulative_pct_first < 27.6 ~ "[17.8, 26.9]",
-    cumulative_pct_first >= 39.9 ~ "[39.9, 49.3]",
+    rank <= 13 ~ "[17.8, 26.9]",
+    rank >= 39 ~ "[39.9, 49.3]",
     TRUE ~ "[27.6, 39.4]")) %>%
   mutate(vax_group = factor(vax_group, 
                             levels = c("[17.8, 26.9]", 
                                        "[27.6, 39.4]", 
-                                       "[39.9, 49.3]")))
+                                       "[39.9, 49.3]"))) %>%
+  dplyr::select(-rank)
 
 n_labels <- levels(tocluster$vax_group)
 
@@ -282,6 +285,21 @@ groupsabbr <- groups %>%
 groups %>%
   dplyr::group_by(vax_group) %>%
   dplyr::summarise(population = sum(population))
+
+groupsovertime <- joined_df %>%
+  filter(week_st == thirdwave_end, population > pop_limit) %>%
+  dplyr::select(zip, cumulative_pct_first) %>%
+  arrange(cumulative_pct_first) %>%
+  mutate(rank = row_number()) %>%
+  mutate(end_group = case_when(
+    rank <= 13 ~ "Lowest quartile",
+    rank >= 39 ~ "Highest quartile",
+    TRUE ~ "Middle 25-75%")) %>%
+  rename(pct_spring_end = cumulative_pct_first) %>%
+  dplyr::select(-rank) %>%
+  right_join(tocluster) %>%
+  arrange(cumulative_pct_first) %>%
+  relocate(c(cumulative_pct_first, vax_group), .before = pct_spring_end)
 
 ```
 
@@ -1076,8 +1094,6 @@ $log(Y_i)-log(pop_i)=\beta_{0i}+\beta_{1i}week+\beta_2wave+\beta_3wave*vaxleveld
 
 ```{r modeling dataset}
 
-# Run Chicago_Vaccinations_SZ.Rmd to line 175 before running this file to import and clean data
-
 start <- secondwavepeak
 chngwave <- thirdwave_st
 end <- mdy("6/14/21")
@@ -1132,7 +1148,7 @@ write.csv(mixedeffectsdf, "mixedeffectsdf.csv")
 
 model1 <- glm(data = filter(mixedeffectsdf, wave == 0), deaths_weekly ~ week*vax_group + offset(log(population)), family = poisson(link = "log"))
 
-summary(model1)
+tab_model(model1, transform = NULL, show.ci = FALSE, show.se = TRUE)
 
 linearHypothesis(model1, c("week:vax_group[17.8, 26.9] = 0", "week:vax_group[27.6, 39.4] = 0"))
 
@@ -1159,7 +1175,6 @@ model2noslope
 #   labs(y = "Fitted Weekly Deaths",
 #        x = "Week",
 #        color = "ZIP")
-
 ```
 
 Model 2b: 6-week lag on vaccination effect
@@ -1208,7 +1223,7 @@ Model 3b:
 
 model3b <- glmer(data = mixedeffectsdf, deaths_weekly ~ (1|zip) + week + wave + wave:vax_group + recoveredleveldec + dec65plus + offset(log(population)), family = poisson(link = "log"))
 
-model3b
+tab_model(model3b, transform = NULL, show.ci = FALSE, show.se = TRUE)
 
 ```
 
@@ -1218,7 +1233,7 @@ IRRs
 tab_model(model2noslope, model3,
 title = "Table 2: Multivariable analysis of risk reduction in deaths from COVID-19, by vaccinations before third wave")
 
-model2noslope
+tab_model(model2noslope, model3, transform = NULL, show.ci = FALSE, show.se = TRUE)
 
 paste("Wave IRR with mean vaccination level (Model 3c groups):", (exp(fixef(model3b)[3] + 
       fixef(model3b)[7])))
@@ -1234,7 +1249,7 @@ vaxleveldec = 10% increase in people with first doses out of entire population; 
 
 model4 <- glmer(data = mixedeffectsdf, deaths_weekly ~ (1|zip) + week + wave + wave:completeleveldec + recoveredleveldec + dec65plus + offset(log(population)), family = poisson(link = "log"))
 
-summary(model4)
+tab_model(model4, transform = NULL, show.ci = FALSE, show.se = TRUE)
 
 paste("Wave IRR with mean vaccination level (Model 4):", exp(fixef(model3)[3] + 
       fixef(model3)[6]*mean(vaxlevel$completeleveldec)))
