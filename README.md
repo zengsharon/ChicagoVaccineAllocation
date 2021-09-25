@@ -1,10 +1,10 @@
 # ChicagoVaccineAllocation
 
-Analysis of data from City of Chicago Data Portal to compare vaccine distribution to measures of COVID mortality in spring of 2021
+Analysis of data from City of Chicago Data Portal to compare vaccine distribution to measures of COVID mortality in spring of 2021.
 
 ## Data Sources
 
-Datasets used in analysis were last downloaded from these sources on 9/8/21 and are also available in this repository
+Datasets used in analysis were last downloaded from these sources on 9/8/21 and are also available in this repository.
 
 [CDPH - Weekly Vaccinations by Zip Code](https://data.cityofchicago.org/Health-Human-Services/COVID-19-Vaccinations-by-ZIP-Code/553k-3xzc) 
 
