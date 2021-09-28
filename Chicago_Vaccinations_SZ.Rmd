@@ -730,6 +730,17 @@ save_kable(table1kab, "table1.html")
 
 ```
 
+```{r table1 denominators}
+
+popdenominators <- economics_social_by_zip %>%
+  dplyr::select(zip, population, pop25over, civiliannoninst) %>%
+  left_join(groupsabbr) %>%
+  dplyr::group_by(vax_group) %>%
+  dplyr::summarise(population = sum(population), pop25over = sum(pop25over), civiliannoninst = sum(civiliannoninst))
+
+```
+
+
 # Vaccination Rollout
 
 ## Cumulative vax - all zip codes
