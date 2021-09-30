@@ -551,6 +551,15 @@ demo_by_zip <- read_csv("https://data.cityofchicago.org/api/views/85cm-7uqa/rows
   dplyr::select(!`Population - Age 18-29`:`Population - Age 18+`) %>%
   relocate(`Population - Age 18-65`, .after = `Population - Age 0-17`)
 
+median_age_df <- read_csv("median_age_ACS.csv") %>%
+  dplyr::select(`Geographic Area Name`,
+                `Estimate!!SEX AND AGE!!Total population`,
+                `Estimate!!SEX AND AGE!!Total population!!Median age (years)`) %>%
+  separate(`Geographic Area Name`, 
+           into = c(NA, "zip")) %>%
+  rename(population = `Estimate!!SEX AND AGE!!Total population`,
+         `Median Age (Years)` = `Estimate!!SEX AND AGE!!Total population!!Median age (years)`)
+
 economics_social_by_zip <- read_csv("economic_characteristics_ACS.csv") %>%
   left_join(read_csv("social_characteristics_ACS.csv")) %>%
   dplyr::select(`Geographic Area Name`,
@@ -578,7 +587,8 @@ economics_social_by_zip <- read_csv("economic_characteristics_ACS.csv") %>%
          pop25over = 
            `Estimate!!EDUCATIONAL ATTAINMENT!!Population 25 years and over`) %>%
   right_join(groupsabbr) %>%
-  left_join(demo_by_zip)
+  left_join(demo_by_zip) %>%
+  left_join(median_age_df)
 
 economics_social_merged <- economics_social_by_zip %>%
   mutate_at(vars(starts_with("Population - ")), 
@@ -589,11 +599,15 @@ economics_social_merged <- economics_social_by_zip %>%
   relocate(c(`% High School Graduate or Higher`,
              `% Health Insurance`,
              `Median Household Income ($)`), 
-             .after = last_col())
+             .after = last_col()) %>%
+  relocate(`Median Age (Years)`, .before = `Population - Female`)
 
 colnames(economics_social_merged) <- colnames(economics_social_merged) %>%
   str_replace_all("Population - Age", "% Age") %>%
   str_replace_all("Population -", "%")
+```
+
+```{r city demo}
 
 citywidenum <- economics_social_by_zip %>%
   dplyr::summarise(across(`Population - Age 0-17`:`Population - Other Race Non-Latinx`, sum),
@@ -606,11 +620,17 @@ citywidepct <- economics_social_merged %>%
   mutate(IQR = round(IQR(`Median Household Income ($)`), 0),
          `Median Household Income ($)` = 
            round(weighted.median(`Median Household Income ($)`, w = population), 0)) %>%
+  mutate(ageIQR = round(IQR(`Median Age (Years)`), 0),
+         `Median Age (Years)` = 
+           round(weighted.median(`Median Age (Years)`, w = population), 0)) %>%
+  relocate(ageIQR, .after = `Median Age (Years)`) %>%
   mutate(across(starts_with("%"), round)) %>%
   mutate(population = sum(population)) %>%
   dplyr::select(-c(Year, zip, vax_group)) %>%
   unique()
+```
 
+```{r group demo}
 table1num <- economics_social_by_zip %>%
   dplyr::group_by(vax_group) %>%
   dplyr::summarise(across(`Population - Age 0-17`:`Population - Other Race Non-Latinx`, sum),
@@ -625,14 +645,27 @@ table1pct <- economics_social_merged %>%
   mutate(IQR = round(IQR(`Median Household Income ($)`), 0),
          `Median Household Income ($)` = 
            round(weighted.median(`Median Household Income ($)`, w = population), 0)) %>%
+  mutate(ageIQR = round(IQR(`Median Age (Years)`), 0),
+         `Median Age (Years)` = 
+           round(weighted.median(`Median Age (Years)`, w = population), 0)) %>%
+  relocate(ageIQR, .after = `Median Age (Years)`) %>%
   mutate(across(starts_with("%"), round)) %>%
   ungroup() %>%
   dplyr::select(-c(Year, population, zip)) %>%
   unique() %>%
   arrange(vax_group)
 
+# denominators
+
+popdenominators <- economics_social_by_zip %>%
+  dplyr::select(zip, population, pop25over, civiliannoninst) %>%
+  left_join(groupsabbr) %>%
+  dplyr::group_by(vax_group) %>%
+  dplyr::summarise(population = sum(population), pop25over = sum(pop25over), civiliannoninst = sum(civiliannoninst))
+
 table1 <- left_join(table1num, table1pct) %>%
-  mutate(`Age 0-17` = paste0(`Population - Age 0-17`, " (",
+  mutate(Population = popdenominators$population,
+         `Age 0-17` = paste0(`Population - Age 0-17`, " (",
                              `% Age 0-17`, ")"),
          `Age 18-65` = paste0(`Population - Age 18-65`,
                               " (",
@@ -640,25 +673,27 @@ table1 <- left_join(table1num, table1pct) %>%
          `Age 65+` = paste0(`Population - Age 65+`,
                               " (",
                              `% Age 65+`, ")"),
+         `Median Age (IQR)` = 
+           paste0(`Median Age (Years)`, " (", ageIQR, ")"),
          `Female` = paste0(`Population - Female`,
                               " (",
                              `% Female`, ")"),
          `Male` = paste0(`Population - Male`,
                               " (",
                              `% Male`, ")"),
-         `Latinx` = paste0(`Population - Latinx`,
+         `Hispanic` = paste0(`Population - Latinx`,
                               " (",
                              `% Latinx`, ")"),
-         `Asian Non-Latinx` = 
+         `Asian Non-Hispanic` = 
            paste0(`Population - Asian Non-Latinx`, " (",
                   `% Asian Non-Latinx`, ")"),
-         `Black Non-Latinx` = 
+         `Black Non-Hispanic` = 
            paste0(`Population - Black Non-Latinx`, " (",
                   `% Black Non-Latinx`, ")"),
-         `White Non-Latinx` = 
+         `White Non-Hispanic` = 
            paste0(`Population - White Non-Latinx`, " (",
                   `% White Non-Latinx`, ")"),
-         `Other Race Non-Latinx` = 
+         `Other Race Non-Hispanic` = 
            paste0(`Population - Other Race Non-Latinx`, " (",
                   `% Other Race Non-Latinx`, ")"),
          `High School Graduate or Higher No. (%)` = 
@@ -669,21 +704,22 @@ table1 <- left_join(table1num, table1pct) %>%
          `Median Household Income $ (IQR)` = 
            paste0(`Median Household Income ($)`, " (", IQR, ")")) %>%
   relocate(`Median Household Income $ (IQR)`, .after = last_col()) %>%
-  dplyr::select(-c(1:27))
+  dplyr::select(-c(1:29))
 
-tochi <- table1pct %>%
-  dplyr::select(-vax_group)
-tochi <- t(tochi)[1:10,]
-colnames(tochi) <- n_labels
+tochi <- table1num[,1:12] %>%
+  dplyr::select(-c(vax_group))
+rownames(tochi) <- n_labels
 
 table1 <- t(table1) %>%
-  cbind(c(
+  cbind(c(NA,
     # age
-    chisq.test(tochi[1:3,])$p.value, NA, NA, 
+    chisq.test(tochi[,1:3])$p.value, NA, NA, 
+    #  median age
+    kruskal.test(`Median Age (Years)`~vax_group, data = economics_social_by_zip)$p.value,
     # sex
-    chisq.test(tochi[4:5,])$p.value, NA, 
+    chisq.test(tochi[,4:5])$p.value, NA, 
     # race
-    chisq.test(tochi[6:10,])$p.value, NA, NA, NA, NA, 
+    chisq.test(tochi[,6:10])$p.value, NA, NA, NA, NA, 
     summary(aov(`% High School Graduate or Higher`~vax_group, data = economics_social_by_zip))[[1]][1,5],
     summary(aov(`% Health Insurance`~vax_group, data = economics_social_by_zip))[[1]][1,5], 
     kruskal.test(`Median Household Income ($)`~vax_group, data = economics_social_by_zip)$p.value))
@@ -700,21 +736,23 @@ for (i in seq_along(table1[,4])) {
   }
 }
 
+colnames(table1) <- append(n_labels, "p")
+
+write.xlsx(table1, "table1.xlsx", row.names = TRUE)
+
 colnames(table1) <- append(cell_spec(n_labels, background = alpha(graphcolors, 0.5)), "p")
 
 row.names(table1)[11:13] <- paste0(row.names(table1)[11:13],
                                 footnote_marker_alphabet(1:3))
-
-write.xlsx(table1, "table1.xlsx", row.names = TRUE)
 
 table1kab <- kable(table1, escape = FALSE,
       caption = "Table 1: Demographics of Vaccination Groups") %>%
   kable_styling(bootstrap_options = "striped",
                 font_size = 20) %>%
   add_header_above(c("", "At Least One Dose on 3/28/21" = n_groups, "")) %>%
-  pack_rows("Age \nNo. (%)", 1, 3) %>%
-  pack_rows("Sex \nNo. (%)", 4, 5) %>%
-  pack_rows("Race and Ethnicity \nNo. (%)", 6, 10) %>%
+  pack_rows("Age \nNo. (%)", 2, 4) %>%
+  pack_rows("Sex \nNo. (%)", 6, 7) %>%
+  pack_rows("Race and Ethnicity \nNo. (%)", 8, 12) %>%
   column_spec(2, background = alpha(graphcolors[1], 0.5)) %>%
   column_spec(3, background = alpha(graphcolors[2], 0.5)) %>%
   column_spec(4, background = alpha(graphcolors[3], 0.5)) %>%
@@ -728,18 +766,18 @@ table1kab
 
 save_kable(table1kab, "table1.html")
 
+tochi2 <- tochi %>%
+  mutate(group = n_labels) %>%
+  dplyr::group_by(group) %>%
+  mutate(under65 = sum(`Population - Age 0-17`, `Population - Age 18-65`)) %>%
+  ungroup() %>%
+  dplyr::select(`Population - Age 65+`, under65)
+
+rownames(tochi2) <- n_labels
+
+chisq.test(tochi2)
+
 ```
-
-```{r table1 denominators}
-
-popdenominators <- economics_social_by_zip %>%
-  dplyr::select(zip, population, pop25over, civiliannoninst) %>%
-  left_join(groupsabbr) %>%
-  dplyr::group_by(vax_group) %>%
-  dplyr::summarise(population = sum(population), pop25over = sum(pop25over), civiliannoninst = sum(civiliannoninst))
-
-```
-
 
 # Vaccination Rollout
 
@@ -988,6 +1026,9 @@ newcasesroll <- to_graph %>%
 newcasesroll
 
 ggsave(paste0("weeklycases", studyperiod, ".png"), newcasesroll, height = 5, width = 9)
+
+ggplot(data = joined_df) +
+  geom_line(aes(x = week_st, y = case_rate_weekly, color = zip), alpha = 0.5)
 ```
 
 # Difference-in-Difference
