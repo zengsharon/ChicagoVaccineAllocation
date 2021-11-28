@@ -191,7 +191,7 @@ merged_df <- merged_df %>%
     filter(is.na(zip) == FALSE) %>%
     ungroup()
  
-write.csv(merged_df, "cases_vaccinations_weekly.csv", row.names = FALSE, na = "NA")
+# write.csv(merged_df, "cases_vaccinations_weekly.csv", row.names = FALSE, na = "NA")
   
 ```
 
@@ -223,7 +223,7 @@ phase_data <- data.frame(phase_labels, phases)
 pop_limit <- 10000
 
 # start of x-axis
-date_cutoff <- mdy("8/9/20")
+date_cutoff <- mdy("10/18/20")
 
 secondwavepeak <- mdy("12/13/20")
 
@@ -905,6 +905,14 @@ rollingweeklymortality
 
 ggsave(paste0("weeklymortality", studyperiod, ".png"), rollingweeklymortality, height = 5, width = 9)
 
+thirdwavedf <- to_graph %>%
+   filter(week_st >= thirdwave_st & week_st <= thirdwave_end) %>%
+  filter(is.na(mort_roll) == FALSE)
+
+paste("low vax peak:", max(filter(thirdwavedf, vax_group == n_labels[1])$mort_roll))
+paste("mid vax peak:", max(filter(thirdwavedf, vax_group == n_labels[2])$mort_roll))
+paste("high vax peak:", max(filter(thirdwavedf, vax_group == n_labels[3])$mort_roll))
+
 ```
 
 ## Map of cumulative mortality throughout 4th wave
@@ -1115,9 +1123,20 @@ mortalitycumulativedid
 ggsave(paste0("didcumulativemortality", studyperiod, ".png"), mortalitycumulativedid, height = 5, width = 9)
 
 lowdid <- to_did %>%
-  filter(week_st == thirdwave_end, vax_group == n_labels[1])
-lowdidlivessaved <- (lowdid$deaths_cumulative-lowdid$absdeaths_counterfactual)*lowdid$population/100000
-paste("Lives saved if lowest vaccinated zip codes experienced same trend as highly vaccinated:", lowdidlivessaved)
+  filter(week_st == thirdwave_end|week_st == thirdwave_st, vax_group == n_labels[1])
+
+highdid <- to_did %>%
+  filter(week_st == thirdwave_end|week_st == thirdwave_st, vax_group == n_labels[3])
+
+lowgroupthirdwavedeaths <- ((lowdid$deaths_cumulative[2] - lowdid$deaths_cumulative[1])*lowdid$population/100000)[1]
+
+highgroupthirdwavedeaths <- ((highdid$deaths_cumulative[2] - highdid$deaths_cumulative[1])*highdid$population/100000)[1]
+
+lowgroupthirdwavecounterfactual <- ((lowdid$absdeaths_counterfactual[2] - lowdid$absdeaths_counterfactual[1])*lowdid$population/100000)[1]
+
+didlivessaved <- lowgroupthirdwavedeaths - lowgroupthirdwavecounterfactual
+
+paste("Lives saved if lowest vaccinated zip codes experienced same trend as highly vaccinated:", didlivessaved)
 
 ```
 
