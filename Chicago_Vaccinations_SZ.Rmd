@@ -1,11 +1,14 @@
 ---
-title: "Consequences of vaccine allocation inequity in Chicago"
+title: "Association of COVID-19 vaccination inequity and mortality in Chicago"
 author: Sharon Zeng
 output: 
   html_document:
     toc: true
     toc_float: true
+    code_folding: hide
 --- 
+
+
 
 ```{r global_options, include=FALSE, cache = FALSE}
 library(knitr)
@@ -23,7 +26,6 @@ library(tidyverse)
 library(RColorBrewer)
 library(ggsci)
 library(zoo)
-library(rcartocolor)
 library(gridExtra)
 library(grid)
 library(lattice)
@@ -35,8 +37,6 @@ library(sjPlot)
 library(ggeffects)
 library(parameters)
 library(webshot)
-library(cluster)
-library(ClusterR)
 library(janitor)
 library(spatstat)
 library(openxlsx)
@@ -48,9 +48,25 @@ library(Hmisc)
 library(weights)
 library(car)
 library(ggmap)
+library(tigris)
+library(sp)
+library(tidycensus)
+library(tidygeocoder)
+library(cowplot)
+library(magick)
 knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE, fig.height = 5, fig.width = 9)
 options(tigris_use_cache = TRUE, tinytex.verbose = TRUE)
 ```
+
+Data from the Chicago Department of Public Health (CDPH) 
+
+* [Vaccine source data](https://data.cityofchicago.org/Health-Human-Services/COVID-19-Vaccinations-by-ZIP-Code/553k-3xzc) (updated 12/30/21, downloaded 1/2/22)
+* [Cases and deaths by zip code source data](https://data.cityofchicago.org/Health-Human-Services/COVID-19-Cases-Tests-and-Deaths-by-ZIP-Code/yhhz-zm2v) (updated 12/30/21, downloaded 1/2/22)
+* [Medical examiner case archive data](https://datacatalog.cookcountyil.gov/Public-Safety/Medical-Examiner-Case-Archive-COVID-19-Related-Dea/3trz-enys) (updated 1/2/22, downloaded 1/2/22)
+* [Chicago population counts](https://data.cityofchicago.org/Health-Human-Services/Chicago-Population-Counts/85cm-7uqa)
+* [Demographics in zip codes (U.S. Census Bureau, 2019 ACS 5-year estimates)](https://data.cityofchicago.org/Health-Human-Services/Chicago-Population-Counts/85cm-7uqa)
+* [More ZCTA demographics (U.S. Census Bureau, 2019 ACS 5-year estimates - Economic and Social Characteristics)](https://www.census.gov/acs/www/data/data-tables-and-tools/data-profiles/)
+* [Zip code and census tract overlap for population estimates (HUD PD&R)](https://www.huduser.gov/portal/datasets/usps_crosswalk.html)
 
 ```{r zip geometry}
 #zip_codes <- zctas(cb = TRUE, class = "sf")
@@ -64,18 +80,9 @@ zips_sf <- zip_codes %>%
   mutate(zip = as.character(zip))
 ```
 
-Data from the Chicago Department of Public Health (CDPH) 
+```{r Census demographic data}
 
-* [Vaccine source data](https://data.cityofchicago.org/Health-Human-Services/COVID-19-Vaccinations-by-ZIP-Code/553k-3xzc) 
-* [Mortality source data](https://data.cityofchicago.org/Health-Human-Services/COVID-19-Cases-Tests-and-Deaths-by-ZIP-Code/yhhz-zm2v)
-* [Demographics in zip codes (U.S. Census Bureau, 2019 ACS 5-year estimates)](https://data.cityofchicago.org/Health-Human-Services/Chicago-Population-Counts/85cm-7uqa)
-* [More ZCTA demographics (U.S. Census Bureau, 2019 ACS 5-year estimates - Economic and Social Characteristics)](https://www.census.gov/acs/www/data/data-tables-and-tools/data-profiles/)
-
-Last updated at `r format(Sys.Date(),'%A, %B %d')` at `r format(Sys.time(), '%I:%M %p')` CST. 
-
-```{r demographic data}
-
-demo_by_zip <- read_csv("https://data.cityofchicago.org/api/views/85cm-7uqa/rows.csv?accessType=DOWNLOAD") %>%
+demo_by_zip <- read_csv("Chicago_Population_Counts_121021.csv") %>%
   filter(`Geography Type` != "Citywide", Year == 2019) %>%
   rename(zip = Geography, population = `Population - Total`) %>%
   mutate(zip = as.character(zip)) %>%
@@ -83,11 +90,10 @@ demo_by_zip <- read_csv("https://data.cityofchicago.org/api/views/85cm-7uqa/rows
 
 ```
 
-
-```{r covid data}
+```{r CDPH covid data}
 covid_by_zip <-
   read_csv(
-    "COVID-19_Cases_Tests__and_Deaths_by_ZIP_Code_090821.csv"
+    "COVID-19_Cases_Tests_and_Deaths_by_ZIP_Code_010222.csv"
   ) %>%
   mutate(
     zip = as.character(`ZIP Code`),
@@ -121,16 +127,16 @@ covid_by_zip <- demo_by_zip %>%
 
 ```{r vaccination data}
 vax_by_zip <-
-  read_csv("COVID-19_Vaccinations_by_ZIP_Code_090821.csv") %>%
+  read_csv("COVID-19_Vaccinations_by_ZIP_Code_010222.csv") %>%
   mutate(zip = as.character(`Zip Code`),
          date = mdy(Date)) %>%
   mutate(week_st = floor_date(date, unit = "weeks", week_start = 7)) %>%
   #get week totals from reported daily numbers
   dplyr::group_by(week_st, zip) %>%
   mutate(
-    cumulative_doses_weekly = max(`Total Doses - Cumulative`),
-    cumulative_first_weekly = max(`1st Dose - Cumulative`),
-    cumulative_complete_weekly = max(`Vaccine Series Completed - Cumulative`),
+    cumulative_doses = max(`Total Doses - Cumulative`),
+    cumulative_first = max(`1st Dose - Cumulative`),
+    cumulative_complete = max(`Vaccine Series Completed - Cumulative`),
     cumulative_pct_first = max(`1st Dose - Percent Population`)*100,
     cumulative_pct_complete = max(`Vaccine Series Completed  - Percent Population`)*100,
     doses_weekly = sum(`Total Doses - Daily`),
@@ -142,8 +148,8 @@ write.csv(vax_by_zip, "vax_by_zip.csv")
 
 vax_by_zip <- vax_by_zip %>%
   #only keep 1 row per week
-  dplyr:: select(zip, week_st, cumulative_doses_weekly, cumulative_first_weekly, cumulative_complete_weekly, cumulative_pct_first, cumulative_pct_complete, doses_weekly, first_weekly, `1st Dose - Cumulative`, `Population`) %>%
-  filter(`1st Dose - Cumulative`== cumulative_first_weekly) %>%
+  dplyr:: select(zip, week_st, cumulative_doses, cumulative_first, cumulative_complete, cumulative_pct_first, cumulative_pct_complete, doses_weekly, first_weekly, `1st Dose - Cumulative`, `Population`) %>%
+  filter(`1st Dose - Cumulative`== cumulative_first) %>%
   dplyr:: select(-`1st Dose - Cumulative`) %>%
   distinct() %>%
   rename(population = `Population`) %>%
@@ -162,7 +168,7 @@ vax_by_zip <- vax_by_zip %>%
       week_st >= mdy("04/19/2021") ~ "2"))
 ```
  
-```{r merge data}
+```{r merge CDPH data}
 # #merge datasets, keeping all rows from covid data (because vaccinations started later)
 # 
 merged_df <-  left_join(covid_by_zip, vax_by_zip) %>%
@@ -190,12 +196,10 @@ merged_df <- merged_df %>%
     #remove rows with missing/not reported zip codes (907 cases cumulatively)
     filter(is.na(zip) == FALSE) %>%
     ungroup()
- 
-# write.csv(merged_df, "cases_vaccinations_weekly.csv", row.names = FALSE, na = "NA")
   
 ```
 
-```{r parameters for graphing}
+```{r dates and legends}
 
 max_date <- max(merged_df$week_st)
 
@@ -203,6 +207,7 @@ max_date <- max(merged_df$week_st)
 # Phase 1B: 1/25/21
 # Phase 1C: 3/29/21
 # Phase 2: 4/19/21
+
 phases <-
   mdy(c("12/15/20", "1/12/21", "01/25/21", "03/29/21", "04/19/21"))
 phase_labels <- factor(
@@ -222,98 +227,160 @@ phase_data <- data.frame(phase_labels, phases)
 
 pop_limit <- 10000
 
-# start of x-axis
-date_cutoff <- mdy("10/18/20")
+# x-axis
+leftdate_cutoff <- mdy("3/1/20")
+rightdate_cutoff <- mdy("12/5/21")
 
 secondwavepeak <- mdy("12/13/20")
+alphawavepeak <- mdy("5/9/21")
 
-# date to group zip codes by, if grouping by only 1 date
-grouping_date <- mdy("3/28/21")
-grouping_date_name <- "Grouped by relative level of 1st doses 6 weeks before peak of 3rd wave (3/28/21)"
-group_legend <- "% of Population with First Doses"
+# dates to group zip codes by
+alpha_grouping_date_chr <- "3/28/21"
+alpha_grouping_date <- mdy(alpha_grouping_date_chr)
+alpha_grouping_date_name <- paste0("Grouped by relative level of 1st doses 6 weeks before peak of alpha wave ", alpha_grouping_date_chr)
+alpha_group_legend <- "Vaccination Group"
 
-thirdwave_st <- mdy("3/28/21")
-thirdwave_end <- mdy("6/13/21")
+delta_grouping_date_chr <- "8/1/21"
+delta_grouping_date <- mdy(delta_grouping_date_chr)
+delta_grouping_date_name <- paste0("Grouped by relative level of 1st doses 6 weeks before peak of delta wave ", delta_grouping_date_chr)
+delta_group_legend <- paste0("% of Population with First Doses\n(", delta_grouping_date_chr, ")")
+
 secondwave_st <- mdy("8/9/20")
+alphawave_st <- alpha_grouping_date
+alphawave_end <- mdy("6/13/21")
+deltawave_st <- delta_grouping_date
+deltawave_end <- mdy("10/31/21")
 
 joined_df <- merged_df %>%
   filter(zip != "60827" & zip != "60707") %>%
-  filter(week_st <= thirdwave_end) %>%
+  filter(week_st <= rightdate_cutoff) %>%
   filter(population > pop_limit)
 
-# protect_chicago_plus <- read_csv("protect_chicago_plus.csv") %>%
-#   mutate(zip = as.character(Zip))
+outliers <- filter(merged_df, population < pop_limit | zip == 60707 | zip == 60827) %>%
+  dplyr::select(zip, population, zip_code_location) %>%
+  distinct()
+
 ```
 
-```{r clustering}
+
+```{r medical examiner data}
+
+# get Census tracts 
+
+# sfgeo <- get_acs(state = "IL", county = "Cook", geography = "tract", variable = "B01001_001", year = 2019, geometry = TRUE)
+# 
+# save(file = "cookcountytracts.R", sfgeo)
+
+load("cookcountytracts.R")
+
+ME_covid_deaths <- read_csv("Medical_Examiner_Case_Archive_COVID-19_Related_Deaths_010222.csv") %>%
+  separate(`Date of Death`, c("death_date", NA, NA), sep = " ") %>%
+  mutate(death_date = mdy(death_date)) %>%
+  mutate(week_st = floor_date(death_date, unit = "weeks", week_start = 7))
+
+# select deaths with geocoded addresses
+ME_covid_deaths_clean <- ME_covid_deaths %>%
+  filter(is.na(longitude) == FALSE) %>%
+  st_as_sf(coords = c("longitude", "latitude"),
+           crs = st_crs(sfgeo))
+
+# add census tract
+ME_covid_deaths_clean <- st_join(ME_covid_deaths_clean, sfgeo)
+
+# add correct incident zip code
+ME_covid_deaths_clean <- st_join(ME_covid_deaths_clean, zips_sf) %>%
+  rename(tract = NAME) %>%
+  separate(GEOID, c(NA, "tract_num"), sep = -6, remove = FALSE) %>%
+  mutate(zip_match = case_when(`Incident Zip Code` == zip ~ 1,
+                               TRUE ~ 0))
+
+# how many deaths had incorrectly reported zip codes?
+paste0("Incorrectly/correctly reported zip codes: ", table(ME_covid_deaths_clean$zip_match)[1], "/", table(ME_covid_deaths_clean$zip_match)[2])
+
+# filter by addresses in Chicago
+ME_to_map <- ME_covid_deaths_clean[st_within(ME_covid_deaths_clean$geometry, left_join(covid_by_zip, zips_sf)$geometry) %>% lengths > 0,] %>%
+  dplyr::select(-`Incident Zip Code`, zip_match) %>%
+  filter(!zip %in% outliers$zip)  %>%
+  filter(`Incident City` == "CHICAGO")
+
+```
+
+```{r alpha clustering}
 
 n_groups <- 3
 
-# change manually
-tocluster <- joined_df %>%
-  filter(week_st == grouping_date, population > pop_limit) %>%
-  dplyr::select(zip, cumulative_pct_first) %>%
+# have to change manually
+
+alpha_groups <- joined_df %>%
+  filter(week_st == alpha_grouping_date, population > pop_limit) %>%
+  dplyr::select(zip, cumulative_pct_first, cumulative_first, zip, population, zip_code_location) %>%
   arrange(cumulative_pct_first) %>%
   mutate(rank = row_number()) %>%
-  mutate(vax_group = case_when(
-    rank <= 13 ~ "[17.8, 26.9]",
-    rank >= 39 ~ "[39.9, 49.3]",
-    TRUE ~ "[27.6, 39.4]")) %>%
-  mutate(vax_group = factor(vax_group, 
-                            levels = c("[17.8, 26.9]", 
-                                       "[27.6, 39.4]", 
-                                       "[39.9, 49.3]"))) %>%
-  dplyr::select(-rank)
+  mutate(vax_group_alpha = case_when(
+    rank <= 13 ~ "Least vaccinated quartile",
+    rank >= 40 ~ "Most vaccinated quartile",
+    TRUE ~ "Middle 25-75%")) %>%
+  mutate(vax_group_alpha = factor(vax_group_alpha, 
+                            levels = c("Least vaccinated quartile", 
+                                       "Middle 25-75%", 
+                                       "Most vaccinated quartile"))) %>%
+  dplyr::select(-rank) %>%
+  rename(pct_first_alpha = cumulative_pct_first,
+         first_doses_alpha = cumulative_first)
 
-n_labels <- levels(tocluster$vax_group)
+n_labels_alpha <- levels(alpha_groups$vax_group_alpha)
 
-groups <- joined_df %>%
-  filter(week_st == grouping_date) %>%
-  right_join(tocluster) %>%
-  dplyr::summarise(vax_group = factor(vax_group, levels = n_labels),
-            cumulative_first_weekly = cumulative_first_weekly,
-            cumulative_pct_first = cumulative_pct_first, 
-            zip = zip, 
-            population = population, 
-            # cluster_mean = cluster_mean, 
-            zip_code_location = zip_code_location) %>%
-  arrange(vax_group, cumulative_pct_first)
-
-groupsabbr <- groups %>%
-  dplyr::select(vax_group, zip)
-
-groups %>%
-  dplyr::group_by(vax_group) %>%
+alpha_groups %>%
+  dplyr::group_by(vax_group_alpha) %>%
   dplyr::summarise(population = sum(population))
 
-groupsovertime <- joined_df %>%
-  filter(week_st == thirdwave_end, population > pop_limit) %>%
-  dplyr::select(zip, cumulative_pct_first) %>%
-  arrange(cumulative_pct_first) %>%
-  mutate(rank = row_number()) %>%
-  mutate(end_group = case_when(
-    rank <= 13 ~ "Lowest quartile",
-    rank >= 39 ~ "Highest quartile",
-    TRUE ~ "Middle 25-75%")) %>%
-  rename(pct_spring_end = cumulative_pct_first) %>%
-  dplyr::select(-rank) %>%
-  right_join(tocluster) %>%
-  arrange(cumulative_pct_first) %>%
-  relocate(c(cumulative_pct_first, vax_group), .before = pct_spring_end)
+table(alpha_groups$vax_group_alpha)
 
 ```
 
-```{r dataset for graphing}
+```{r delta clustering}
+
+n_groups <- 3
+
+# have to change manually
+
+delta_groups <- joined_df %>%
+  filter(week_st == delta_grouping_date, population > pop_limit) %>%
+  dplyr::select(zip, cumulative_pct_first, cumulative_first, zip, population, zip_code_location) %>%
+  arrange(cumulative_pct_first) %>%
+  mutate(rank = row_number()) %>%
+  mutate(vax_group_delta = case_when(
+    rank <= 13 ~ "[36.4, 49.5]",
+    rank >= 40 ~ "[65.4, 79.7]",
+    TRUE ~ "[50.5, 64.9]")) %>%
+  mutate(vax_group_delta = factor(vax_group_delta, 
+                            levels = c("[36.4, 49.5]", 
+                                       "[50.5, 64.9]", 
+                                       "[65.4, 79.7]"))) %>%
+  dplyr::select(-rank) %>%
+  rename(pct_first_delta = cumulative_pct_first,
+         first_doses_delta = cumulative_first)
+
+n_labels_delta <- levels(delta_groups$vax_group_delta)
+
+delta_groups %>%
+  dplyr::group_by(vax_group_delta) %>%
+  dplyr::summarise(population = sum(population))
+
+table(delta_groups$vax_group_delta)
+
+```
+
+```{r datasets for graphing}
 
 # weeks to roll average over
 k <- 5
 
-to_graph <- groupsabbr %>%
+to_graph_alpha <- dplyr::select(alpha_groups, c(zip, vax_group_alpha)) %>%
   left_join(joined_df) %>%
-  mutate(vax_group = factor(vax_group, levels = n_labels)) %>%
-  filter(week_st >= date_cutoff, week_st <= thirdwave_end) %>%
-  arrange(vax_group, week_st) %>%
-  dplyr::group_by(week_st, week, vax_group) %>%
+  filter(week_st >= leftdate_cutoff, week_st <= deltawave_end) %>%
+  arrange(vax_group_alpha, week_st) %>%
+  dplyr::group_by(week_st, week, vax_group_alpha) %>%
   dplyr::summarise(
     deathratesd = sqrt(wtd.var(death_rate_weekly, population)),
     death_rate_weekly = weighted.mean(death_rate_weekly, population),
@@ -322,11 +389,36 @@ to_graph <- groupsabbr %>%
     first_dose_weekly = sum(first_weekly) * 100000 / sum(population),
     deathscumulativesd = sqrt(wtd.var(death_rate_cumulative, population)),
     deaths_cumulative = weighted.mean(death_rate_cumulative, population),
-    first_dose_cumulative = sum(cumulative_first_weekly),
+    first_dose_cumulative = sum(cumulative_first),
     cumulative_pct_first = weighted.mean(cumulative_pct_first*100, population),
     population = sum(population)) %>%
     #rolling average mortality rate over k weeks)
-  dplyr::group_by(vax_group) %>%
+  dplyr::group_by(vax_group_alpha) %>%
+  mutate(mort_roll = zoo::rollmean(death_rate_weekly, k, fill = NA)) %>%
+  ungroup() %>%
+  mutate(vax_group_alpha = case_when(
+    vax_group_alpha == n_labels_alpha[1] ~ "Least vaccinated quartile",
+    vax_group_alpha == n_labels_alpha[2] ~ "Middle 25-75%",
+    vax_group_alpha == n_labels_alpha[3] ~ "Most vaccinated quartile"))
+
+to_graph_delta <- dplyr::select(delta_groups, c(zip, vax_group_delta)) %>%
+  left_join(joined_df) %>%
+  filter(week_st >= secondwave_st, week_st <= deltawave_end) %>%
+  arrange(vax_group_delta, week_st) %>%
+  dplyr::group_by(week_st, week, vax_group_delta) %>%
+  dplyr::summarise(
+    deathratesd = sqrt(wtd.var(death_rate_weekly, population)),
+    death_rate_weekly = weighted.mean(death_rate_weekly, population),
+    caseratesd = sqrt(wtd.var(case_rate_weekly, population)),
+    case_rate_weekly = weighted.mean(case_rate_weekly, population),
+    first_dose_weekly = sum(first_weekly) * 100000 / sum(population),
+    deathscumulativesd = sqrt(wtd.var(death_rate_cumulative, population)),
+    deaths_cumulative = weighted.mean(death_rate_cumulative, population),
+    first_dose_cumulative = sum(cumulative_first),
+    cumulative_pct_first = weighted.mean(cumulative_pct_first*100, population),
+    population = sum(population)) %>%
+    #rolling average mortality rate over k weeks)
+  dplyr::group_by(vax_group_delta) %>%
   mutate(mort_roll = zoo::rollmean(death_rate_weekly, k, fill = NA)) %>%
   ungroup()
 ```
@@ -353,29 +445,25 @@ linetypes <- c("longdash", "dotdash", "dotted", "dashed", "twodash")
 # ggplot layers that get reused a lot
 
 aesthetics <- list(
-  geom_vline(data = phase_data, aes(xintercept = phases, 
-                                    linetype = phase_labels), 
-             color = "gray50",
-             key_glyph = "path", 
-             size = 1),
-  geom_line(aes(color = vax_group), 
-            size = 1),  
-  # geom_vline(xintercept = grouping_date, color = "black", alpha = 0.5),
-  geom_point(aes(fill = vax_group, 
-                 shape = vax_group), color = "gray20", size = 3),
+  annotate("rect", xmin = alphawave_st, xmax = alphawave_end, ymin = -Inf, ymax = Inf,
+           alpha = .1, fill = "black"),
+  annotate("rect", xmin = deltawave_st, xmax = deltawave_end, ymin = -Inf, ymax = Inf,
+           alpha = .1, fill = "black"),
+  # geom_vline(data = phase_data, aes(xintercept = phases, 
+  #                                   linetype = phase_labels), 
+  #            color = "gray50",
+  #            key_glyph = "path", 
+  #            size = 1),
+  # scale_linetype_manual(values = linetypes), 
   scale_fill_manual(values = graphcolors),
   scale_color_manual(values = graphcolors),
   scale_shape_manual(values = graphshapes),
-  scale_linetype_manual(values = linetypes), 
   scale_x_date(date_breaks = "4 weeks", 
                date_minor_breaks = "1 week", 
                guide = guide_axis(angle = 45),
                date_labels = "%b-%d-%Y",
                expand = c(0.01, 0.01)),
-  labs(shape = group_legend, 
-       fill = group_legend, 
-       color = group_legend, 
-       linetype = "Distribution Phase"),
+  # labs(linetype = "Distribution Phase"),
     theme_bw() +
   theme(panel.grid.minor = element_blank(), panel.grid.major = element_blank(), 
         axis.text=element_text(size=12, 
@@ -387,160 +475,273 @@ aesthetics <- list(
         legend.text = element_text(size = 12),
         legend.key.size = unit(1, "lines")))
 
-studyperiod <- paste(date_cutoff, max(to_graph$week_st), sep = "_")
+alphaperiod <- paste(leftdate_cutoff, alphawave_end, sep = "_")
+
+deltaperiod <- paste(alphawave_end, max(to_graph_delta$week_st), sep = "_")
 ```
 
 \newpage
 
 # Groups
 
-## Histogram of groups
+### eFIGURE 1b: Histograms of groups
 
-```{r grouping hist check}
-groupinghist <- groups %>%
-  mutate(vax_group = factor(vax_group, 
-                            levels = n_labels)) %>%
-  ggplot(aes(cumulative_pct_first, 
-             fill = vax_group)) +
+```{r}
+
+histstyle <- list(theme_bw(),
+  theme(panel.grid.minor = element_blank(), panel.grid.major.x = element_blank(), 
+        panel.grid.major.y = element_line(color = "gray20")),
+  scale_y_continuous(expand =  expansion(add = c(0, 0.5)),
+                     breaks = seq(0, 10, 1)),
+  scale_x_continuous(expand = c(0, 0), limits = c(0, 100)),
+  theme(axis.text=element_text(size=12,
+                               face = "bold"),
+        axis.title=element_text(size=12,
+                                face = "bold"),
+        legend.title = element_text(size = 10,
+                                    face = "bold"),
+        legend.text = element_text(size = 10),
+        legend.key.size = unit(2, "lines")))
+
+alpha_groupinghist <- alpha_groups %>%
+  ggplot(aes(pct_first_alpha, 
+             fill = vax_group_alpha)) +
     geom_histogram(color = "black") +
   scale_fill_manual(values = graphcolors) +
-  labs(fill = group_legend, 
+  labs(fill = alpha_group_legend, 
        y = "Number of Zip Codes\n", 
-       x = "\n% of Population with First Doses") +
-  theme_bw() +
-  theme(panel.grid.minor = element_blank(), panel.grid.major.x = element_blank(), 
-        panel.grid.major.y = element_line(color = "gray20")) +
-  scale_y_continuous(expand =  expansion(add = c(0, 0.5)),
-                     breaks = seq(0, 7, 1)) +
-  scale_x_continuous(limits = c(0, 50), 
-                     expand = c(0, 0)) +
-  theme(axis.text=element_text(size=20, 
-                               face = "bold"),
-        axis.title=element_text(size=20,
-                                face = "bold"),
-        legend.title = element_text(size = 16,
-                                    face = "bold"),
-        legend.text = element_text(size = 16),
-        legend.key.size = unit(2, "lines"))
+       x = "% of population with at least 1 dose") +
+  histstyle 
 
-groupinghist
+alpha_groupinghist
 
-ggsave("groupinghist.png", groupinghist, height = 7, width = 12)
+ggsave("alpha_groupinghist.png", alpha_groupinghist, height = 4, width = 7)
+
+delta_groupinghist <- delta_groups %>%
+  ggplot(aes(pct_first_delta, 
+             fill = vax_group_delta)) +
+    geom_histogram(color = "black") +
+  scale_fill_manual(values = graphcolors) +
+  labs(fill = "Delta Vaccination Group", 
+       y = "Number of Zip Codes\n", 
+       x = delta_group_legend) +
+  histstyle 
+
+delta_groupinghist
+
+ggsave("delta_groupinghist.png", delta_groupinghist, height = 4, width = 7)
 ```
 
-## Table of groups
+### eTABLE 3: Zip codes and alpha groups included in analysis
 
-```{r table of groups}
+```{r}
 
-st1 <- groups[,1:5] %>%
-    rename(`Vaccination Group` = vax_group,
-           `First Doses by 3/28/21` = cumulative_first_weekly,
-         `% First Doses` = cumulative_pct_first,
-         `ZIP` = zip,
-         `Population` = population)
+groups_tbl <- dplyr::select(alpha_groups, -zip_code_location) %>%
+  left_join(dplyr::select(delta_groups, -zip_code_location))
+
+st1 <- groups_tbl %>%
+  relocate(
+    `ZIP` = zip,
+    `Vaccination Group` = vax_group_alpha,
+    `Number of First Doses by 3/28/21` = first_doses_alpha,
+    `% First Doses by 3/28/21` = pct_first_alpha,
+    `Delta Vaccination Group` = vax_group_delta,
+    `Number of First Doses by 8/1/21` = first_doses_delta,
+    `% First Doses by 8/1/21` = pct_first_delta,
+    `Population` = population) %>%
+  arrange(`% First Doses by 3/28/21`) %>%
+  dplyr::select(-`Delta Vaccination Group`)
   
-kable(st1, col.names = c("Group", "Number of First Doses", "% First Doses", "ZIP Code", "Population"),
+  
+kable(st1,
       caption = "Zip codes included in analysis") %>%
     kable_styling(latex_options = "striped")
 
-write.xlsx(st1, "supptable1.xlsx", row.names = FALSE)
+write.xlsx(st1, "supptable1_groups.xlsx", row.names = FALSE)
 ```
 
-## Table of outliers
+## eTABLE 2: Zip codes excluded from analysis/outliers
 
-```{r outliers}
-st2 <- merged_df %>%
-  filter(week_st == grouping_date) %>%
-  filter(population <= pop_limit | zip == "60827" | zip == "60707") %>%
-  dplyr:: select(cumulative_first_weekly, cumulative_pct_first, zip, population) %>%
+```{r}
+outliers_tbl <- filter(merged_df, week_st == alpha_grouping_date) %>%
+  filter(zip %in% outliers$zip) %>%
+  dplyr:: select(cumulative_first, cumulative_pct_first, zip, population) %>%
   mutate(group = "Outliers",
          population = case_when(zip == "60827" | zip == "60707" ~ NA_real_,
                                 TRUE ~ as.numeric(population))) %>%
-  relocate(group) %>%
   rename(`Vaccination Group` = group,
-         `Number of First Doses` = cumulative_first_weekly,
-         `% First Doses on 3/28/21` = cumulative_pct_first,
-         `ZIP` = zip,
-         `Population` = population)
+         `Number of First Doses by 3/28/21` = cumulative_first,
+         `% First Doses by 3/28/21` = cumulative_pct_first) %>%
+  left_join(filter(merged_df, week_st == delta_grouping_date)) %>%
+  rename(`Number of First Doses by 8/1/21` = cumulative_first,
+         `% First Doses by 8/1/21` = cumulative_pct_first,
+         ZIP = zip,
+         Population = population) %>%
+  dplyr::select(c(`Vaccination Group`,
+         `Number of First Doses by 3/28/21`,
+         `% First Doses by 3/28/21`),
+         `Number of First Doses by 8/1/21`,
+         `% First Doses by 8/1/21`,
+         ZIP,
+         Population)
 
-kable(st2, col.names = c("Group", "Number of First Doses", "% First Doses", "ZIP Code", "Population")) %>%
+kable(outliers_tbl) %>%
   kable_styling(latex_options = "striped")
 
-write.xlsx(st2, "supptable2.xlsx", row.names = FALSE, na = "NA")
+write.xlsx(outliers_tbl, "supptable2_outliers.xlsx", row.names = FALSE, na = "NA")
 
 ```
 
-## Maps of vaccinations and groups
+### For new eTABLE 1? : Groups over time
+```{r}
 
-```{r grouping maps}
+alphagroupsovertime <- filter(joined_df, week_st == alphawave_end, population > pop_limit) %>%
+  dplyr::select(zip, cumulative_pct_first) %>%
+  arrange(cumulative_pct_first) %>%
+  mutate(rank = row_number()) %>%
+  mutate(alphawave_end = case_when(
+    rank <= 13 ~ "Lowest quartile",
+    rank > 39 ~ "Highest quartile",
+    TRUE ~ "Middle 25-75%")) %>%
+  rename(pct_alpha_end = cumulative_pct_first) %>%
+  right_join(dplyr::select(alpha_groups, -zip_code_location)) %>%
+  dplyr::select(-c(rank, first_doses_alpha)) %>%
+  arrange(pct_first_alpha) %>%
+  relocate(c(pct_first_alpha, vax_group_alpha, pct_alpha_end), .after = zip) %>%
+  rename(ZIP = zip, 
+         `alpha Vaccination Group` = vax_group_alpha,
+         `% 1st Doses by 3/28/21` = pct_first_alpha,
+         `alpha End Vaccination Quartile` = alphawave_end,
+         `% 1st Doses by 6/13/21` = pct_alpha_end,
+         Population = population)
 
-tomap <- merged_df %>%
-  filter(population < pop_limit) %>%
-  mutate(vax_group = paste("Suppressed (pop <", pop_limit, ")")) %>%
-  dplyr:: select(vax_group, zip, population, zip_code_location) %>%
-  distinct() %>%
-  full_join(groups) %>%
-  left_join(zips_sf) %>%
-  mutate(vax_group = factor(vax_group, levels = append(n_labels, paste("Suppressed (pop <", pop_limit, ")"))))
+table(alphagroupsovertime$`alpha End Vaccination Quartile`)
 
-vax_map <- ggplot() + 
-    geom_sf(data = tomap, aes(geometry = geometry, fill = cumulative_pct_first)) +
-    geom_sf_text_repel(data = filter(tomap, population >= pop_limit),
-                               aes(label = zip, geometry = geometry),
-                       size = 3,
+kable(alphagroupsovertime) %>%
+  kable_styling(latex_options = "striped")
+
+write.xlsx(alphagroupsovertime, "newsupptable2alpha.xlsx", row.names = FALSE, na = "NA")
+
+deltagroupsovertime <- filter(joined_df, week_st == rightdate_cutoff, population > pop_limit) %>%
+  dplyr::select(zip, cumulative_pct_first) %>%
+  arrange(cumulative_pct_first) %>%
+  mutate(rank = row_number()) %>%
+  mutate(deltawave_end = case_when(
+    rank <= 13 ~ "Lowest quartile",
+    rank > 39 ~ "Highest quartile",
+    TRUE ~ "Middle 25-75%")) %>%
+  rename(pct_delta_end = cumulative_pct_first) %>%
+  right_join(dplyr::select(delta_groups, -zip_code_location)) %>%
+  dplyr::select(-c(rank, first_doses_delta)) %>%
+  arrange(pct_first_delta) %>%
+  relocate(c(pct_first_delta, vax_group_delta, pct_delta_end), .after = zip) %>%
+  rename(ZIP = zip, 
+         `Delta Vaccination Group` = vax_group_delta,
+         `% 1st Doses by 8/1/21` = pct_first_delta,
+         `Delta End Vaccination Quartile` = deltawave_end,
+         `% 1st Doses by 12/10/21` = pct_delta_end,
+         Population = population)
+
+table(deltagroupsovertime$`Delta End Vaccination Quartile`)
+
+```
+
+## Maps of vaccinations and alpha_groups
+
+### FIGURE 1a: Maps of vaccinations
+
+```{r}
+
+vaxmapstyle <- list(geom_sf_text_repel(aes(label = zip),
+                       size = 2.5,
                        # fontface = "bold",
                        nudge_x = 0,
                        nudge_y = 0,
                        point.size = NA,
                        box.padding = 0.1,
                        min.segment.length = 0.1,
-                       max.overlaps = Inf) +
-    theme_void() + coord_sf() + 
-    scale_fill_distiller(trans = "reverse", limits = c(max(tomap$cumulative_pct_first), 0)) +
-    scale_color_manual(values = mapcolorscustom) +
-    labs(fill = group_legend, title = "Vaccinations", color = "Vaccination Group") +
+                       max.overlaps = Inf),
+                    geom_sf(data = ME_to_map, alpha = 0),
+    theme_void(), coord_sf(), 
+    scale_fill_distiller(trans = "reverse", limits = c(max(groups_tbl$pct_first_delta), min(groups_tbl$pct_first_alpha))),
+    scale_color_manual(values = mapcolorscustom),
+    labs(color = "Vaccination Group"),
     theme(legend.position = "right", 
         plot.title = element_text(hjust = 0.5),
-        legend.title = element_text(size = 12, face = "bold"),
-        legend.text = element_text(size = 12),
-        legend.key.size = unit(1, "lines")) +
-  guides(color = guide_legend(override.aes = list(size=4)))
+        legend.title = element_text(size = 10, face = "bold"),
+        legend.text = element_text(size = 10),
+        legend.key.size = unit(1, "lines")),
+  guides(color = guide_legend(override.aes = list(size=4))))
 
-vax_map
+alphavaxmap <- left_join(alpha_groups, zips_sf) %>%
+  ggplot(aes(geometry = geometry)) + 
+    geom_sf(aes(fill = pct_first_alpha)) +
+    vaxmapstyle +
+  labs(fill = alpha_group_legend)
 
-ggsave("vaxmap.png", vax_map, height = 7, width = 7)
+alphavaxmap
 
-grouping_map <- ggplot() + 
-    geom_sf(data = tomap, aes(geometry = geometry, fill = vax_group)) +
-    geom_sf_text_repel(data = filter(tomap, population > pop_limit),
-                       aes(geometry = geometry, label = zip),
-                       size = 3,
+ggsave("alphavaxmap.pdf", alphavaxmap, height = 7, width = 7)
+
+deltavaxmap <- left_join(delta_groups, zips_sf) %>%
+  ggplot(aes(geometry = geometry)) + 
+    geom_sf(aes(fill = pct_first_delta)) +
+  vaxmapstyle +
+  labs(fill = delta_group_legend)
+
+deltavaxmap
+
+ggsave("deltavaxmap.pdf", deltavaxmap, height = 7, width = 7)
+```
+
+### eFIGURE 1c: Maps of vaccination groups
+
+```{r}
+
+groupingmapsstyle <- list(geom_sf_text_repel(aes(label = zip),
+                       size = 2.5,
                        # fontface = "bold",
                        nudge_x = 0,
                        nudge_y = 0,
                        point.size = NA,
                        box.padding = 0.1,
                        min.segment.length = 0.1,
-                       max.overlaps = Inf) +
-    theme_void() + coord_sf() + 
-    scale_fill_manual(values = mapcolorscustom) +
-    labs(fill = group_legend, title = "Distribution of Vaccination Groups", color = "Vaccination Group") +
+                       max.overlaps = Inf),
+                       geom_sf(data = ME_to_map, alpha = 0),
+    theme_void(), coord_sf(), 
+    scale_fill_manual(values = mapcolorscustom),
     theme(legend.position = "right", 
         plot.title = element_text(hjust = 0.5),
-        legend.title = element_text(size = 12, face = "bold"),
-        legend.text = element_text(size = 12),
-        legend.key.size = unit(1, "lines")) +
-  guides(color = guide_legend(override.aes = list(size=4)))
+        legend.title = element_text(size = 10, face = "bold"),
+        legend.text = element_text(size = 10),
+        legend.key.size = unit(1, "lines")),
+  guides(color = guide_legend(override.aes = list(size=4))))
 
-grouping_map
+alpha_grouping_map <- left_join(alpha_groups, zips_sf) %>%
+  ggplot(aes(geometry = geometry)) + 
+    geom_sf(aes(fill = vax_group_alpha)) +
+    labs(fill = alpha_group_legend, title = "Distribution of alpha Vaccination Groups", color = "Vaccination Group") +
+  groupingmapsstyle
 
-ggsave("groupingmap.png", grouping_map, height = 7, width = 7)
+alpha_grouping_map
+
+ggsave("alpha_groupingmap.png", alpha_grouping_map, height = 7, width = 7)
+
+delta_grouping_map <- left_join(delta_groups, zips_sf) %>%
+  ggplot(aes(geometry = geometry)) + 
+    geom_sf(aes(fill = vax_group_delta)) +
+    labs(fill = delta_group_legend, title = "Distribution of Delta Vaccination Groups", color = "Vaccination Group") +
+    groupingmapsstyle
+
+delta_grouping_map
+
+ggsave("delta_groupingmap.png", delta_grouping_map, height = 7, width = 7)
 
 ```
 
-## Table 1: Demographics of Vaccination Groups
+## Demographics
 
-```{r table 1}
+```{r table 1 data import}
 
 demo_by_zip <- read_csv("https://data.cityofchicago.org/api/views/85cm-7uqa/rows.csv?accessType=DOWNLOAD") %>%
   filter(`Geography Type` != "Citywide", Year == 2019) %>%
@@ -549,7 +750,8 @@ demo_by_zip <- read_csv("https://data.cityofchicago.org/api/views/85cm-7uqa/rows
   dplyr::select(-`Geography Type`, -`Record ID`) %>%
   mutate(`Population - Age 18-65` = `Population - Age 18+` - `Population - Age 65+`) %>%
   dplyr::select(!`Population - Age 18-29`:`Population - Age 18+`) %>%
-  relocate(`Population - Age 18-65`, .after = `Population - Age 0-17`)
+  relocate(`Population - Age 18-65`, .after = `Population - Age 0-17`) %>%
+  filter(!zip %in% outliers$zip)
 
 median_age_df <- read_csv("median_age_ACS.csv") %>%
   dplyr::select(`Geographic Area Name`,
@@ -586,16 +788,14 @@ economics_social_by_zip <- read_csv("economic_characteristics_ACS.csv") %>%
            `Estimate!!EDUCATIONAL ATTAINMENT!!Population 25 years and over!!High school graduate or higher`,
          pop25over = 
            `Estimate!!EDUCATIONAL ATTAINMENT!!Population 25 years and over`) %>%
-  right_join(groupsabbr) %>%
-  left_join(demo_by_zip) %>%
+  right_join(demo_by_zip) %>%
   left_join(median_age_df)
 
 economics_social_merged <- economics_social_by_zip %>%
   mutate_at(vars(starts_with("Population - ")), 
                  list(~ ./ population * 100)) %>%
   dplyr::select(-c(healthinsuranceest, highschoolest, civiliannoninst, pop25over)) %>%
-  left_join(groupsabbr) %>%
-  mutate(across(-c(vax_group, zip), as.numeric)) %>%
+  mutate(across(-c(zip), as.numeric)) %>%
   relocate(c(`% High School Graduate or Higher`,
              `% Health Insurance`,
              `Median Household Income ($)`), 
@@ -606,8 +806,9 @@ colnames(economics_social_merged) <- colnames(economics_social_merged) %>%
   str_replace_all("Population - Age", "% Age") %>%
   str_replace_all("Population -", "%")
 ```
+### eTABLE 1: Demographics of overall study population (entire city)
 
-```{r city demo}
+```{r}
 
 citywidenum <- economics_social_by_zip %>%
   dplyr::summarise(across(`Population - Age 0-17`:`Population - Other Race Non-Latinx`, sum),
@@ -626,22 +827,34 @@ citywidepct <- economics_social_merged %>%
   relocate(ageIQR, .after = `Median Age (Years)`) %>%
   mutate(across(starts_with("%"), round)) %>%
   mutate(population = sum(population)) %>%
-  dplyr::select(-c(Year, zip, vax_group)) %>%
+  dplyr::select(-c(Year, zip)) %>%
   unique()
+
+citywidenum
+citywidepct
 ```
 
-```{r group demo}
-table1num <- economics_social_by_zip %>%
-  dplyr::group_by(vax_group) %>%
+### TABLE 1: Demographics of vaccination groups
+
+```{r TABLE 1 - alpha group demographics}
+
+economics_social_by_zip <- left_join(economics_social_by_zip,
+                                     dplyr::select(groups_tbl, c(zip, vax_group_alpha)))
+
+economics_social_merged <- left_join(economics_social_merged,
+                                     dplyr::select(groups_tbl, c(zip, vax_group_alpha)))
+
+table1num_alpha <- economics_social_by_zip %>%
+  dplyr::group_by(vax_group_alpha) %>%
   dplyr::summarise(across(`Population - Age 0-17`:`Population - Other Race Non-Latinx`, sum),
                    healthinsurance = sum(healthinsuranceest),
                    highschool = sum(highschoolest))
 
-table1pct <- economics_social_merged %>%
-  dplyr::group_by(vax_group) %>%
+table1pct_alpha <- economics_social_merged %>%
+  dplyr::group_by(vax_group_alpha) %>%
   mutate_at(vars(starts_with("%")), 
                  list(~ weighted.mean(., population))) %>%
-  group_by(vax_group) %>%
+  group_by(vax_group_alpha) %>%
   mutate(IQR = round(IQR(`Median Household Income ($)`), 0),
          `Median Household Income ($)` = 
            round(weighted.median(`Median Household Income ($)`, w = population), 0)) %>%
@@ -653,18 +866,16 @@ table1pct <- economics_social_merged %>%
   ungroup() %>%
   dplyr::select(-c(Year, population, zip)) %>%
   unique() %>%
-  arrange(vax_group)
+  arrange(vax_group_alpha)
 
 # denominators
 
-popdenominators <- economics_social_by_zip %>%
-  dplyr::select(zip, population, pop25over, civiliannoninst) %>%
-  left_join(groupsabbr) %>%
-  dplyr::group_by(vax_group) %>%
+popdenominators_alpha <- economics_social_by_zip %>%
+  dplyr::group_by(vax_group_alpha) %>%
   dplyr::summarise(population = sum(population), pop25over = sum(pop25over), civiliannoninst = sum(civiliannoninst))
 
-table1 <- left_join(table1num, table1pct) %>%
-  mutate(Population = popdenominators$population,
+table1_alpha <- left_join(table1num_alpha, table1pct_alpha) %>%
+  mutate(Population = popdenominators_alpha$population,
          `Age 0-17` = paste0(`Population - Age 0-17`, " (",
                              `% Age 0-17`, ")"),
          `Age 18-65` = paste0(`Population - Age 18-65`,
@@ -706,337 +917,288 @@ table1 <- left_join(table1num, table1pct) %>%
   relocate(`Median Household Income $ (IQR)`, .after = last_col()) %>%
   dplyr::select(-c(1:29))
 
-tochi <- table1num[,1:12] %>%
-  dplyr::select(-c(vax_group))
-rownames(tochi) <- n_labels
+tochi_alpha <- table1num_alpha[,2:13]
+rownames(tochi_alpha) <- n_labels_alpha
 
-table1 <- t(table1) %>%
+table1_alpha <- t(table1_alpha) %>%
   cbind(c(NA,
     # age
-    chisq.test(tochi[,1:3])$p.value, NA, NA, 
+    chisq.test(tochi_alpha[,1:3])$p.value, NA, NA, 
     #  median age
-    kruskal.test(`Median Age (Years)`~vax_group, data = economics_social_by_zip)$p.value,
+    kruskal.test(`Median Age (Years)`~vax_group_alpha, data = economics_social_by_zip)$p.value,
     # sex
-    chisq.test(tochi[,4:5])$p.value, NA, 
+    chisq.test(tochi_alpha[,4:5])$p.value, NA, 
     # race
-    chisq.test(tochi[,6:10])$p.value, NA, NA, NA, NA, 
-    summary(aov(`% High School Graduate or Higher`~vax_group, data = economics_social_by_zip))[[1]][1,5],
-    summary(aov(`% Health Insurance`~vax_group, data = economics_social_by_zip))[[1]][1,5], 
-    kruskal.test(`Median Household Income ($)`~vax_group, data = economics_social_by_zip)$p.value))
+    chisq.test(tochi_alpha[,6:10])$p.value, NA, NA, NA, NA, 
+    summary(aov(`% High School Graduate or Higher`~vax_group_alpha, data = economics_social_by_zip))[[1]][1,5],
+    summary(aov(`% Health Insurance`~vax_group_alpha, data = economics_social_by_zip))[[1]][1,5], 
+    kruskal.test(`Median Household Income ($)`~vax_group_alpha, data = economics_social_by_zip)$p.value))
 
-for (i in seq_along(table1[,4])) {
-  if (is.na(table1[i,4])) {
-    table1[i,4] <- ""
+for (i in seq_along(table1_alpha[,4])) {
+  if (is.na(table1_alpha[i,4])) {
+    table1_alpha[i,4] <- ""
   }
-  else if (as.numeric(table1[i,4]) < 0.001) {
-    table1[i,4] <- "< 0.001"
+  else if (as.numeric(table1_alpha[i,4]) < 0.001) {
+    table1_alpha[i,4] <- "< 0.001"
   }
   else {
-    table1[i,4] <- round(as.numeric(table1[i,4]), 3)
+    table1_alpha[i,4] <- round(as.numeric(table1_alpha[i,4]), 3)
   }
 }
 
-colnames(table1) <- append(n_labels, "p")
+colnames(table1_alpha) <- append(n_labels_alpha, "p")
 
-write.xlsx(table1, "table1.xlsx", row.names = TRUE)
-
-colnames(table1) <- append(cell_spec(n_labels, background = alpha(graphcolors, 0.5)), "p")
-
-row.names(table1)[11:13] <- paste0(row.names(table1)[11:13],
-                                footnote_marker_alphabet(1:3))
-
-table1kab <- kable(table1, escape = FALSE,
-      caption = "Table 1: Demographics of Vaccination Groups") %>%
-  kable_styling(bootstrap_options = "striped",
-                font_size = 20) %>%
-  add_header_above(c("", "At Least One Dose on 3/28/21" = n_groups, "")) %>%
-  pack_rows("Age \nNo. (%)", 2, 4) %>%
-  pack_rows("Sex \nNo. (%)", 6, 7) %>%
-  pack_rows("Race and Ethnicity \nNo. (%)", 8, 12) %>%
-  column_spec(2, background = alpha(graphcolors[1], 0.5)) %>%
-  column_spec(3, background = alpha(graphcolors[2], 0.5)) %>%
-  column_spec(4, background = alpha(graphcolors[3], 0.5)) %>%
-  # column_spec(5, background = alpha(graphcolors[4], 0.5)) %>%
-  # column_spec(6, background = alpha(graphcolors[5], 0.5)) %>%
-  footnote(alphabet = c("Calculated as percentage of total civilian noninstitutionalized population", 
-                        "Calculated as percentage of people over 25 years old", 
-                        "Calculated as population-weighted median of zip codes' median"))
-
-table1kab
-
-save_kable(table1kab, "table1.html")
-
-tochi2 <- tochi %>%
-  mutate(group = n_labels) %>%
+tochi2_alpha <- tochi_alpha %>%
+  mutate(group = n_labels_alpha) %>%
   dplyr::group_by(group) %>%
   mutate(under65 = sum(`Population - Age 0-17`, `Population - Age 18-65`)) %>%
   ungroup() %>%
   dplyr::select(`Population - Age 65+`, under65)
 
-rownames(tochi2) <- n_labels
+rownames(tochi2_alpha) <- n_labels_alpha
 
-chisq.test(tochi2)
+chisq.test(tochi2_alpha)
 
 ```
 
 # Vaccination Rollout
 
-## Cumulative vax - all zip codes
+### eFIGURE 1a: Visualizations of vaccination groups
 
-```{r cumulative vax all zip codes}
+#### Cumulative vax
 
-cumulativevaxallzip <- groupsabbr %>%
-  right_join(joined_df) %>%
-  arrange(desc(vax_group)) %>%
-  filter(week_st >= secondwavepeak) %>%
+```{r}
+
+cumulativevaxstyle <- list(
+  scale_fill_manual(values = graphcolors) ,
+  scale_color_manual(values = graphcolors) ,
+  scale_shape_manual(values = graphshapes) ,
+  scale_linetype_manual(values = linetypes) , 
+  scale_x_date(date_breaks = "4 weeks", 
+               date_minor_breaks = "1 week", 
+               guide = guide_axis(angle = 45),
+               date_labels = "%b-%d-%Y",
+               expand = c(0.01, 0.01)) ,
+  scale_y_continuous(limits = c(0, 100)) ,
+  labs(x = "\nWeek", y = "First Doses (% Population)\n", 
+       linetype = "Distribution Phase") ,
+  theme_bw() ,
+  theme(panel.grid.minor = element_blank(), panel.grid.major = element_blank(),
+        axis.text=element_text(size=12, 
+                               face = "bold"),
+        axis.title=element_text(size=12,
+                                face = "bold"),
+        legend.title = element_text(size = 10,
+                                    face = "bold"),
+        legend.text = element_text(size = 10),
+        legend.key.size = unit(1, "lines")))
+
+cumulativevax_alpha <- left_join(joined_df,
+                                 dplyr::select(groups_tbl, c(zip, vax_group_alpha))) %>%
+  arrange(desc(vax_group_alpha)) %>%
+  filter(week_st >= secondwavepeak, week_st <= deltawave_end) %>%
   ggplot(aes(x = week_st, y = cumulative_pct_first)) +
   geom_vline(
     data = phase_data,
     aes(xintercept = phases, linetype = phase_labels),
     color = "gray50",
     key_glyph = "path", size = 1) +
-  geom_line(aes(color = vax_group, group = zip), alpha = 0.5) +
-  geom_point(aes(fill = vax_group, shape = vax_group, group = zip), 
+  geom_line(aes(color = vax_group_alpha, group = zip), alpha = 0.5) +
+  geom_point(aes(fill = vax_group_alpha, shape = vax_group_alpha, group = zip), 
              color = "gray20",
              alpha = 0.5,
              size = 2) +
-  scale_fill_manual(values = graphcolors) +
-  scale_color_manual(values = graphcolors) +
-  scale_shape_manual(values = graphshapes) +
-  scale_linetype_manual(values = linetypes) + 
-  scale_x_date(date_breaks = "4 weeks", 
-               date_minor_breaks = "1 week", 
-               guide = guide_axis(angle = 45),
-               date_labels = "%b-%d-%Y",
-               expand = c(0.01, 0.01)) +
-  scale_y_continuous(limits = c(0, 100)) +
-  labs(x = "\nWeek", y = "First Doses (% Population)", title = "Cumulative Vaccination - All Zip Codes",
-       linetype = "Distribution Phase", color = group_legend, fill = group_legend, shape = group_legend) +
-  theme_bw() +
-  theme(panel.grid.minor = element_blank(), panel.grid.major = element_blank(),
-        axis.text=element_text(size=14, 
-                               face = "bold"),
-        axis.title=element_text(size=14,
-                                face = "bold"),
-        legend.title = element_text(size = 12,
-                                    face = "bold"),
-        legend.text = element_text(size = 12),
-        legend.key.size = unit(1, "lines"))
+  cumulativevaxstyle +
+  labs(color = alpha_group_legend, fill = alpha_group_legend, shape = alpha_group_legend)
 
-cumulativevaxallzip
+cumulativevax_alpha
 
-ggsave(paste0("cumulativevaxallzip", secondwavepeak, "_", max(to_graph$week_st), ".png"), cumulativevaxallzip, height = 6, width = 9)
+ggsave(paste0("cumulativevax_alpha", secondwavepeak, "_", deltawave_end, ".png"), cumulativevax_alpha, height = 4, width = 8)
 
 ```
 
-## Cumulative vax - grouped
+# New Cases
 
-```{r cumulative vax}
+### FIGURE 2a: Weekly new cases
 
-vaxcumulative <- ggplot(data = to_graph, 
-                        aes(x = week_st, y = cumulative_pct_first)) +
+```{r}
+
+newcases_alpha <- to_graph_alpha %>%
+  dplyr::group_by(vax_group_alpha) %>%
+  mutate(caseroll = zoo::rollmean(case_rate_weekly, k, fill = NA)) %>%
+  ungroup() %>%
+  ggplot(aes(x = week_st, y = caseroll)) +
   aesthetics +
-    theme(panel.grid.minor = element_blank(), panel.grid.major = element_blank(),
-        axis.text=element_text(size=14, 
-                               face = "bold"),
-        axis.title=element_text(size=14,
-                                face = "bold"),
-        legend.title = element_text(size = 12,
-                                    face = "bold"),
-        legend.text = element_text(size = 12),
-        legend.key.size = unit(1, "lines")) +
-  scale_y_continuous(limits = c(0, 100)) +
-  labs(x = "\nWeek", y = "% of Population with First Doses\n", linetype = "Distribution Phase")
+  geom_line(aes(color = vax_group_alpha), 
+            size = 1) +
+  geom_point(aes(fill = vax_group_alpha, 
+                 shape = vax_group_alpha), color = "gray20", size = 3) +
+  labs(x = "\nWeek", y = "Weekly New Cases (per 100,000)\n",
+    shape = alpha_group_legend, 
+    fill = alpha_group_legend, 
+    color = alpha_group_legend) +
+    geom_text(data = NULL, label = "Alpha", x = mdy("5/5/21"), y = 560) +
+  geom_text(data = NULL, label = "Delta", x = mdy("9/15/21"), y = 560)
 
-ggsave(paste0("cumulativevaxgrouped", studyperiod, ".png"), vaxcumulative, height = 6, width = 9)
+newcases_alpha
 
-```
-
-## Weekly vax
-
-```{r weekly vax}
-
-vaxweekly <- ggplot(data = to_graph, aes(x = week_st, y = first_dose_weekly)) +
-  aesthetics +
-  labs(x = "Week", y = "Weekly First Doses/100,000 Population", title = "Trends in Weekly  Vaccination")
-
-vaxweekly
-
-ggsave(paste0("weeklyvax", date_cutoff, "_", max(to_graph$week_st), ".png"), vaxweekly, height = 5, width = 9)
+ggsave(paste0("weeklycases_alpha", min(to_graph_alpha$week_st), "_", max(to_graph_alpha$week_st), ".pdf"), newcases_alpha, height = 5, width = 9)
 
 ```
 
 # Mortality Rate
 
-## Cumulative mortality
+### FIGURE 2b Rolling average mortality
 
-```{r cumulative mortality}
-mortalitycumulative <-
-  ggplot(data = filter(to_graph, vax_group == n_labels[1] | vax_group == n_labels[3]), aes(x = week_st, y = deaths_cumulative)) +
+```{r}
+
+weeklymortality_alpha <-
+  ggplot(data = to_graph_alpha, aes(x = week_st, y = mort_roll)) +
   aesthetics +
-  scale_fill_manual(values = c(graphcolors[1], graphcolors[3])) +
-  scale_color_manual(values = c(graphcolors[1], graphcolors[3])) +
-  scale_shape_manual(values = c(graphshapes[1], graphshapes[3])) +
-  labs(
-    x = "\nWeek",
-    y = "Deaths (per 100,000)\n") +
-  scale_y_continuous(limits = c(0, 260))
+  geom_line(aes(color = vax_group_alpha), 
+            size = 1) +
+  geom_point(aes(fill = vax_group_alpha, 
+                 shape = vax_group_alpha), color = "gray20", size = 3) +
+  labs(x = "\nWeek", y = "Weekly Deaths (per 100,000)\n",
+    color = alpha_group_legend,
+    fill = alpha_group_legend,
+    shape = alpha_group_legend) +
+    geom_text(data = NULL, label = "Alpha", x = mdy("5/5/21"), y = 13.5) +
+    geom_text(data = NULL, label = "Delta", x = mdy("9/15/21"), y = 13.5)
 
-mortalitycumulative
+weeklymortality_alpha
 
-ggsave(paste0("cumulativemortality", studyperiod, ".png"),
-       mortalitycumulative,
-       height = 5,
-       width = 9)
+ggsave(paste0("weeklymortality_alpha", min(to_graph_alpha$week_st), "_", max(to_graph_alpha$week_st), ".pdf"),weeklymortality_alpha, height = 5, width = 9)
 
-```
+# alpha peaks
 
-## Rolling average mortality
-
-```{r rolling average weekly mortality}
-
-rollingweeklymortality <-
-  ggplot(data = to_graph, aes(x = week_st, y = mort_roll)) +
-  aesthetics +
-  labs(x = "\nWeek", y = "Deaths (per 100,000)\n",
-    title = "Trends in COVID-19 Mortality Rate - 5 Week Rolling Averages")
-
-rollingweeklymortality
-
-ggsave(paste0("weeklymortality", studyperiod, ".png"), rollingweeklymortality, height = 5, width = 9)
-
-thirdwavedf <- to_graph %>%
-   filter(week_st >= thirdwave_st & week_st <= thirdwave_end) %>%
+alphawavedf <- to_graph_alpha %>%
+   filter(week_st >= alphawave_st & week_st <= alphawave_end) %>%
   filter(is.na(mort_roll) == FALSE)
 
-paste("low vax peak:", max(filter(thirdwavedf, vax_group == n_labels[1])$mort_roll))
-paste("mid vax peak:", max(filter(thirdwavedf, vax_group == n_labels[2])$mort_roll))
-paste("high vax peak:", max(filter(thirdwavedf, vax_group == n_labels[3])$mort_roll))
+paste("low vax peak:", max(filter(alphawavedf, vax_group_alpha == n_labels_alpha[1])$mort_roll))
+paste("mid vax peak:", max(filter(alphawavedf, vax_group_alpha == n_labels_alpha[2])$mort_roll))
+paste("high vax peak:", max(filter(alphawavedf, vax_group_alpha == n_labels_alpha[3])$mort_roll))
+
+# delta peaks
+
+deltawavedf <- to_graph_alpha %>%
+   filter(week_st >= deltawave_st & week_st <= deltawave_end) %>%
+  filter(is.na(mort_roll) == FALSE)
+
+paste("low vax peak:", max(filter(deltawavedf, vax_group_alpha == n_labels_alpha[1])$mort_roll))
+paste("mid vax peak:", max(filter(deltawavedf, vax_group_alpha == n_labels_alpha[2])$mort_roll))
+paste("high vax peak:", max(filter(deltawavedf, vax_group_alpha == n_labels_alpha[3])$mort_roll))
 
 ```
 
-## Map of cumulative mortality throughout 4th wave
+## FIGURE 1b: mortality map + Pearson's cor
 
-```{r mortality map}
+```{r}
 
-tomapmortality <- groups %>%
-  right_join(dplyr::select(joined_df, -c(cumulative_pct_first, cumulative_first_weekly))) %>%
-  filter(week_st >= thirdwave_st & week_st <= thirdwave_end) %>%
-  filter(is.na(population) == FALSE) %>%
-  mutate(vax_group = case_when(population < pop_limit ~ paste0("Suppressed (pop <", pop_limit, ")"),
-                               TRUE ~ as.character(vax_group))) %>%
-  dplyr::group_by(zip) %>%
-  dplyr::summarise(vax_group = vax_group, 
-            zip = zip, 
-            population = population, 
-            zip_code_location = zip_code_location,
-            cumulative_pct_first = cumulative_pct_first,
-            cumulative_deaths = sum(deaths_weekly) * 100000/population) %>%
-  distinct() %>%
-  mutate(cumulative_deaths = case_when(vax_group == paste0("Suppressed (pop <", pop_limit, ")") ~
-                                         NA_real_,
-                                       TRUE ~ as.numeric(cumulative_deaths))) %>%
-  mutate(vax_group = factor(vax_group, levels = append(n_labels, paste0("Suppressed (pop <", pop_limit, ")")))) %>%
-  left_join(zips_sf)
-
-mortalitymap <- ggplot() + 
-   geom_sf(data = tomapmortality, aes(geometry = geometry, fill = cumulative_deaths)) +
-    geom_sf_text_repel(data = filter(tomapmortality, population >= pop_limit),
-                               aes(label = zip, geometry = geometry),
-                       size = 3,
-                       # fontface = "bold",
-                       nudge_x = 0,
-                       nudge_y = 0,
-                       point.size = NA,
-                       box.padding = 0.1,
-                       min.segment.length = 0.1,
-                       max.overlaps = Inf) +
-    theme_void() + coord_sf() + 
-    scale_fill_distiller(palette = "Reds", trans = "reverse") +
-    scale_color_manual(values = mapcolorscustom) +
-    labs(fill = "Deaths during Spring Wave", title = "Deaths During Spring Wave") +
+mortalitymapstyle <- list(theme_void(), 
+    coord_sf(), 
+    scale_fill_distiller(palette = "Reds", trans = "reverse"),
+    scale_color_manual(values = mapcolorscustom),
     theme(legend.position = "right", 
         plot.title = element_text(hjust = 0.5),
         legend.title = element_text(size = 12, face = "bold"),
-        legend.text = element_text(size = 12),
-        legend.key.size = unit(1, "lines")) +
-  guides(color = guide_legend(override.aes = list(size=4)))
+        legend.text = element_text(size = 10),
+        legend.key.size = unit(1, "lines")),
+  guides(color = guide_legend(override.aes = list(size=4))))
 
-mortalitymap
+alphamortalitymapdf <- alpha_groups %>%
+  left_join(dplyr::select(joined_df, -c(cumulative_pct_first, cumulative_first))) %>%
+  filter(week_st >= alphawave_st & week_st <= alphawave_end) %>%
+  dplyr::group_by(zip) %>%
+  dplyr::summarise(vax_group_alpha = vax_group_alpha, 
+            zip = zip, 
+            population = population, 
+            zip_code_location = zip_code_location,
+            cumulative_deaths = sum(deaths_weekly) * 100000/population,
+            pct_first_alpha = pct_first_alpha) %>%
+  distinct() %>%
+  left_join(zips_sf)
 
-ggsave("springwavemortalitymap.png", mortalitymap, height = 7, width = 7)
-
-x <- tomapmortality$cumulative_deaths
-y <- tomapmortality$cumulative_pct_first
-w <- tomapmortality$population
+x <- alphamortalitymapdf$cumulative_deaths
+y <- alphamortalitymapdf$pct_first_alpha
+w <- alphamortalitymapdf$population
 
 cor(x, y)
-wtd.cor(x, y, w)
-```
+alpha_r <- wtd.cor(x, y, w)
 
-## Distribution of deaths by vaccination group during 4th wave
+alpha_r[1] <- round(alpha_r[1], 2)
 
-```{r mortality bar}
+if(alpha_r[4] < 0.001) {
+  alpha_r[4] <- "(p < 0.001)"
+} else{
+  alpha_r[4] <- paste0(c("p = ", round(alpha_r[4], 3)))
+}
 
-mortalitybar <- to_graph %>%
-  mutate(wave = case_when(week_st >= date_cutoff & week_st < secondwave_st ~ 1,
-                          week_st >= secondwave_st & week_st < thirdwave_st ~ 2,
-                          week_st >= thirdwave_st & week_st <= thirdwave_end ~ 3)) %>%
-  filter(is.na(wave) == FALSE) %>%
-  dplyr::group_by(vax_group, wave) %>%
-  dplyr::summarise(cumulative_deaths_abs = sum(death_rate_weekly*population/100000)) %>%
-  dplyr::group_by(wave) %>%
-  mutate(pct_deaths = (cumulative_deaths_abs/sum(cumulative_deaths_abs))*100) %>%
-  ggplot(aes(x = wave, y = pct_deaths, fill = vax_group)) +
-    geom_bar(position = "dodge", stat = "identity") +
-    geom_text(aes(x = wave, label = paste0(cumulative_deaths_abs, "(", round(pct_deaths), ")")), 
-              position = position_dodge2(width = 0.9, preserve = "single"),
-              vjust = 1.5,
-              fontface = "bold",
-              size = 6) +
-    scale_fill_manual(values = graphcolors) +
-    labs(y = "% of Deaths\n", x = "\nWave", title = "Deaths during waves by vaccination group\n",
-         fill = group_legend) +
-  theme_bw() +
-  scale_y_continuous(expand = c(0,0), limits = c(0, 70),
-                     breaks = seq(0, 70, 10)) +
-  theme(panel.grid.minor = element_blank(), panel.grid.major.x = element_blank(), 
-        panel.grid.major.y = element_line(color = "gray20")) +
-  theme(axis.text=element_text(size=16, 
-                               face = "bold"),
-        axis.title=element_text(size=18,
-                                face = "bold"),
-        legend.title = element_text(size = 16,
-                                    face = "bold"),
-        legend.text = element_text(size = 16),
-        legend.key.size = unit(2, "lines"))
+alphamortalitymap <- alphamortalitymapdf %>%
+  ggplot() + 
+    geom_sf(aes(geometry = geometry, fill = cumulative_deaths)) +
+    geom_sf(data = filter(ME_to_map, week_st >= alphawave_st & 
+                               week_st <= alphawave_end),
+            alpha = 0.4, shape = 16, size = 2) +
+    labs(fill = "Deaths during Alpha Wave") +
+  mortalitymapstyle +
+  geom_label(x = -88, y = 42,
+             label = "test")
 
-mortalitybar
+alphamortalitymap <- ggdraw(alphamortalitymap) +
+  draw_image("rectangle.png", scale = 0.45, x = 1, hjust = 1, halign = 1, valign = 0.9) +
+  draw_label(paste("Pearson's correlation:", alpha_r[1], alpha_r[4], sep = " "), hjust = 1, x = 0.98, y = 0.875, size = 11, fontface = "bold")
 
-ggsave("mortalitybar.png", mortalitybar, width = 12, height = 7)
-```
+ggsave("alphawavemortalitymap_dots.pdf", alphamortalitymap, height = 7, width = 7)
 
-# New Cases
+# Delta
 
-## Grouped by vaccinations just before Phase 2
+deltamortalitymapdf <- delta_groups %>%
+  left_join(dplyr::select(joined_df, -c(cumulative_pct_first, cumulative_first))) %>%
+  filter(week_st >= deltawave_st & week_st <= deltawave_end) %>%
+  dplyr::group_by(zip) %>%
+  dplyr::summarise(vax_group_delta = vax_group_delta, 
+            zip = zip, 
+            population = population, 
+            zip_code_location = zip_code_location,
+            cumulative_deaths = sum(deaths_weekly) * 100000/population,
+            pct_first_delta = pct_first_delta) %>%
+  distinct() %>%
+  left_join(zips_sf)
 
-```{r weekly new cases}
+x <- deltamortalitymapdf$cumulative_deaths
+y <- deltamortalitymapdf$pct_first_delta
+w <- deltamortalitymapdf$population
 
-newcasesroll <- to_graph %>%
-  dplyr::group_by(vax_group) %>%
-  mutate(caseroll = zoo::rollmean(case_rate_weekly, k, fill = NA)) %>%
-  ungroup() %>%
-  ggplot(aes(x = week_st, y = caseroll)) +
-  aesthetics +
-  labs(x = "\nWeek", y = "New Cases (per 100,000)\n",
-    title = "Trends in COVID-19 Cases after Vaccination")
+cor(x, y)
+delta_r <- wtd.cor(x, y, w)
 
-newcasesroll
+delta_r[1] <- round(delta_r[1], 2)
 
-ggsave(paste0("weeklycases", studyperiod, ".png"), newcasesroll, height = 5, width = 9)
+if(delta_r[4] < 0.001) {
+  delta_r[4] <- "(p < 0.001)"
+} else{
+  delta_r[4] <- paste0(c("p = ", round(delta_r[4], 3)))
+}
 
-ggplot(data = joined_df) +
-  geom_line(aes(x = week_st, y = case_rate_weekly, color = zip), alpha = 0.5)
+deltamortalitymap <- deltamortalitymapdf %>%
+  ggplot() + 
+    geom_sf(aes(geometry = geometry, fill = cumulative_deaths)) +
+    geom_sf(data = filter(ME_to_map, week_st >= deltawave_st & 
+                               week_st <= deltawave_end),
+            alpha = 0.4, shape = 16, size = 2) +
+    labs(fill = "Deaths during Delta Wave") +
+  mortalitymapstyle +
+  geom_label(x = -88, y = 42,
+             label = "test")
+
+deltamortalitymap <- ggdraw(deltamortalitymap) +
+  draw_image("rectangle.png", scale = 0.45, x = 1, hjust = 1, halign = 1, valign = 0.9) +
+  draw_label(paste("Pearson's correlation:", delta_r[1], delta_r[4], sep = " "), hjust = 1, x = 0.98, y = 0.875, size = 11, fontface = "bold")
+
+ggsave("deltawavemortalitymap_dots.pdf", deltamortalitymap, height = 7, width = 7)
+
 ```
 
 # Difference-in-Difference
@@ -1047,143 +1209,205 @@ If low group had been vaccinated at same rate as high group
 
 # Started DID at Phase 1C activation (4 weeks after weekly vaccination trends started to diverge)
 
-DID_stdate <- grouping_date
+alphaDID_stdate <- alpha_grouping_date
 
-DID_st <- to_graph %>%
-  filter(week_st == grouping_date)
+alphaDID_st <- to_graph_alpha %>%
+  filter(week_st == alpha_grouping_date)
 
-to_did <- to_graph %>%
-  # difference from t0 (DID_st) in high and low groups
+to_did_alpha <- to_graph_alpha %>%
+  # difference from t0 (alphaDID_st) in high and low groups
   mutate(
     diff0total = case_when(
-      vax_group == factor(n_labels)[1] ~ DID_st$deaths_cumulative[1] - deaths_cumulative,
-      vax_group == factor(n_labels)[n_groups] ~ DID_st$deaths_cumulative[n_groups] - deaths_cumulative),
-    diff0weekly = case_when(
-      vax_group == factor(n_labels)[1] ~ DID_st$death_rate_weekly[1] - death_rate_weekly,
-      vax_group == factor(n_labels)[n_groups] ~ DID_st$death_rate_weekly[n_groups] - death_rate_weekly),
-    diff0wkroll = case_when(
-      vax_group == factor(n_labels)[1] ~ DID_st$mort_roll[1] - mort_roll,
-      vax_group == factor(n_labels)[n_groups] ~ DID_st$mort_roll[n_groups] - mort_roll)) %>%
+      vax_group_alpha == factor(n_labels_alpha)[1] ~ alphaDID_st$deaths_cumulative[1] - deaths_cumulative,
+      vax_group_alpha == factor(n_labels_alpha)[n_groups] ~ alphaDID_st$deaths_cumulative[n_groups] - deaths_cumulative)) %>%
   # make it subtractable
   dplyr::group_by(week_st) %>%
-  mutate(diff1total = rev(diff0total), 
-         diff1weekly = rev(diff0weekly),
-         diff1wkroll = rev(diff0wkroll)) %>%
+  mutate(diff1total = rev(diff0total)) %>%
   ungroup() %>%
   mutate(absdeaths_counterfactual = case_when(
-            week_st >= DID_stdate & vax_group == factor(n_labels)[1] ~ 
-               DID_st$deaths_cumulative[1]-diff1total,
-            week_st >= DID_stdate & vax_group == factor(n_labels)[n_groups] ~
-               DID_st$deaths_cumulative[n_groups]-diff1total),
-         absdeath_rate_weekly_counterfactual = case_when(
-            week_st >= DID_stdate & vax_group == factor(n_labels)[1] ~ 
-               DID_st$death_rate_weekly[1] - diff1weekly,
-            week_st >= DID_stdate & vax_group == factor(n_labels)[n_groups] ~
-               DID_st$death_rate_weekly[n_groups] - diff1weekly),
-         abs_wkroll_counterfactual = case_when(
-            week_st >= DID_stdate & vax_group == factor(n_labels)[1] ~
-              DID_st$mort_roll[1] - diff1wkroll,
-            week_st >= DID_stdate & vax_group == factor(n_labels)[n_groups] ~
-              DID_st$mort_roll[n_groups] - diff1wkroll)) %>%
-  mutate(diff0rel = case_when(
-            vax_group == factor(n_labels)[1] ~ deaths_cumulative/DID_st$deaths_cumulative[1],
-            vax_group == factor(n_labels)[n_groups] ~ 
-               deaths_cumulative/DID_st$deaths_cumulative[n_groups])) %>%
-  dplyr::group_by(week_st) %>%
-  mutate(diff1rel = rev(diff0rel)) %>%
-  ungroup() %>%
-  mutate(reldeaths_counterfactual = case_when(
-            week_st >= DID_stdate & vax_group == factor(n_labels)[1] ~ 
-               DID_st$deaths_cumulative[1]*diff1rel,
-            week_st >= DID_stdate & vax_group == factor(n_labels)[n_groups] ~
-               DID_st$deaths_cumulative[n_groups]*diff1rel))
+            week_st >= alphaDID_stdate & vax_group_alpha == factor(n_labels_alpha)[1] ~ 
+               alphaDID_st$deaths_cumulative[1]-diff1total,
+            week_st >= alphaDID_stdate & vax_group_alpha == factor(n_labels_alpha)[n_groups] ~
+               alphaDID_st$deaths_cumulative[n_groups]-diff1total)) %>%
+  filter(is.na(absdeaths_counterfactual) == FALSE)
+
 ```
 
-## Cumulative mortality - absolute DID
+## FIGURE 2c alpha Cumulative mortality - absolute DID
 
-Figure out the legend
+```{r DID figure}
 
-```{r cumulative mortality DID abs}
-mortalitycumulativedid <- mortalitycumulative +
-  # filtered out counterfactuals for high group
-  geom_point(data = filter(to_did, vax_group == n_labels[1]), 
+mortalitycumulative_alpha <- filter(to_graph_alpha, 
+                                     vax_group_alpha == n_labels_alpha[1] |
+                                       vax_group_alpha == n_labels_alpha[3]) %>%
+  filter(week_st >= secondwavepeak, week_st <= deltawave_end) %>%
+  ggplot(aes(x = week_st, y = deaths_cumulative)) +
+  aesthetics +
+  geom_line(aes(color = vax_group_alpha), 
+            size = 1) +
+  geom_point(aes(fill = vax_group_alpha, 
+                 shape = vax_group_alpha), color = "gray20", size = 3) +
+  scale_fill_manual(values = c(graphcolors[1], graphcolors[3])) +
+  scale_color_manual(values = c(graphcolors[1], graphcolors[3])) +
+  scale_shape_manual(values = c(graphshapes[1], graphshapes[3])) +
+  labs(
+    x = "\nWeek",
+    y = "Cumulative Deaths (per 100,000)\n",
+    shape = alpha_group_legend,
+    color = alpha_group_legend,
+    fill = alpha_group_legend) +
+  scale_y_continuous(limits = c(0, 300)) +
+  geom_text(data = NULL, label = "Alpha", x = mdy("5/5/21"), y = 300) +
+  geom_text(data = NULL, label = "Delta", x = mdy("9/15/21"), y = 300)
+
+mortalitycumulativedid_alpha <- mortalitycumulative_alpha +
+  # filtered out counterfactuals for low group
+  geom_point(data = filter(to_did_alpha, vax_group_alpha == n_labels_alpha[1]), 
              aes(x = week_st, y = absdeaths_counterfactual, fill = "Counterfactual", color = "Counterfactual", shape = "Counterfactual"),
              size = 3) +
-  # filtered out counterfactuals for high group
-  geom_line(data = filter(to_did, vax_group == n_labels[1]), 
-            aes(x = week_st, y = absdeaths_counterfactual, group = vax_group, color = "Counterfactual"), 
+  # filtered out counterfactuals for low group
+  geom_line(data = filter(to_did_alpha, vax_group_alpha == n_labels_alpha[1]), 
+            aes(x = week_st, y = absdeaths_counterfactual, group = vax_group_alpha, color = "Counterfactual"), 
             linetype = "dashed") +
-  scale_fill_manual(values = c(graphcolors[1], graphcolors[3], "#FFFFFF")) +
-  scale_color_manual(values = c(graphcolors[1], graphcolors[3], "#FF0000")) +
-  scale_shape_manual(values = c(graphshapes[1], graphshapes[3], 1)) +
-  labs(color = group_legend, fill = group_legend, shape = group_legend)
+  scale_fill_manual(values = c("#FFFFFF", graphcolors[1], graphcolors[3])) +
+  scale_color_manual(values = c("#FF0000", graphcolors[1], graphcolors[3])) +
+  scale_shape_manual(values = c(1, graphshapes[1], graphshapes[3])) +
+  labs(color = alpha_group_legend, fill = alpha_group_legend, shape = alpha_group_legend) 
   
-mortalitycumulativedid
+mortalitycumulativedid_alpha
 
-ggsave(paste0("didcumulativemortality", studyperiod, ".png"), mortalitycumulativedid, height = 5, width = 9)
-
-lowdid <- to_did %>%
-  filter(week_st == thirdwave_end|week_st == thirdwave_st, vax_group == n_labels[1])
-
-highdid <- to_did %>%
-  filter(week_st == thirdwave_end|week_st == thirdwave_st, vax_group == n_labels[3])
-
-lowgroupthirdwavedeaths <- ((lowdid$deaths_cumulative[2] - lowdid$deaths_cumulative[1])*lowdid$population/100000)[1]
-
-highgroupthirdwavedeaths <- ((highdid$deaths_cumulative[2] - highdid$deaths_cumulative[1])*highdid$population/100000)[1]
-
-lowgroupthirdwavecounterfactual <- ((lowdid$absdeaths_counterfactual[2] - lowdid$absdeaths_counterfactual[1])*lowdid$population/100000)[1]
-
-didlivessaved <- lowgroupthirdwavedeaths - lowgroupthirdwavecounterfactual
-
-paste("Lives saved if lowest vaccinated zip codes experienced same trend as highly vaccinated:", didlivessaved)
+ggsave(paste0("didcumulativemortality_alpha", min(to_graph_alpha$week_st), "_", max(to_graph_alpha$week_st), ".pdf"), mortalitycumulativedid_alpha, height = 5, width = 9)
 
 ```
 
-### DID with rolling average of weekly mortality
+```{r DID alpha and delta }
 
-```{r DID with rolling mortality}
-rollingmortdid <- rollingweeklymortality +
-  # filtered out counterfactuals for high group
-  geom_point(data = filter(to_did, vax_group == n_labels[1]), 
-             aes(x = week_st, y = abs_wkroll_counterfactual, 
-                 shape = vax_group), color = "red", size = 3, show.legend = FALSE) +
-  # filtered out counterfactuals for high group
-  geom_line(data = filter(to_did, vax_group == n_labels[1]), 
-            aes(x = week_st, y = abs_wkroll_counterfactual, group = vax_group),
-            color = "red", linetype = "dashed") +
-  geom_vline(xintercept = mean(DID_st$week_st), color = "red")
+lowdid_alpha_delta <- to_did_alpha %>%
+  filter(week_st == alphawave_st|week_st == deltawave_end, vax_group_alpha == n_labels_alpha[1])
 
-ggsave(paste0("didweeklymortality", studyperiod, ".png"), rollingmortdid, height = 5, width = 9)
+highdid_alpha_delta <- to_did_alpha %>%
+  filter(week_st == alphawave_st|week_st == deltawave_end, vax_group_alpha == n_labels_alpha[3])
+
+lowgroupalphadeltawavedeaths <- ((lowdid_alpha_delta$deaths_cumulative[2] - lowdid_alpha_delta$deaths_cumulative[1])*lowdid_alpha_delta$population/100000)[1]
+
+highgroupalphadeltawavedeaths <- ((highdid_alpha_delta$deaths_cumulative[2] - highdid_alpha_delta$deaths_cumulative[1])*highdid_alpha_delta$population/100000)[1]
+
+lowgroupalphadeltacounterfactual <- ((lowdid_alpha_delta$absdeaths_counterfactual[2] - lowdid_alpha_delta$absdeaths_counterfactual[1])*lowdid_alpha_delta$population/100000)[1]
+
+did_alpha_deltalivessaved <- lowgroupalphadeltawavedeaths - lowgroupalphadeltacounterfactual
+
+totalalphadeltadeaths <- joined_df %>%
+  filter(week_st >= alphawave_st & week_st <= deltawave_end) 
+totalalphadeltadeaths <- sum(totalalphadeltadeaths$deaths_weekly)
+
+paste("Total alpha + delta wave deaths:", totalalphadeltadeaths)
+
+paste("High group alpha + delta deaths:", highgroupalphadeltawavedeaths)
+
+paste("Low group alpha + delta deaths:", lowgroupalphadeltawavedeaths)
+
+paste("Deaths in lowest vaccinated group in counterfactual scenario:", lowgroupalphadeltacounterfactual)
+
+paste("Lives saved if lowest vaccinated zip codes experienced same trend as highly vaccinated:", did_alpha_deltalivessaved)
+```
+
+```{r DID alpha}
+lowdid_alpha <- to_did_alpha %>%
+  filter(week_st == alphawave_end|week_st == alphawave_st, vax_group_alpha == n_labels_alpha[1])
+
+highdid_alpha <- to_did_alpha %>%
+  filter(week_st == alphawave_end|week_st == alphawave_st, vax_group_alpha == n_labels_alpha[3])
+
+lowgroupalphawavedeaths <- ((lowdid_alpha$deaths_cumulative[2] - lowdid_alpha$deaths_cumulative[1])*lowdid_alpha$population/100000)[1]
+
+highgroupalphawavedeaths <- ((highdid_alpha$deaths_cumulative[2] - highdid_alpha$deaths_cumulative[1])*highdid_alpha$population/100000)[1]
+
+lowgroupalphawavecounterfactual <- ((lowdid_alpha$absdeaths_counterfactual[2] - lowdid_alpha$absdeaths_counterfactual[1])*lowdid_alpha$population/100000)[1]
+
+did_alphalivessaved <- lowgroupalphawavedeaths - lowgroupalphawavecounterfactual
+
+totalalphadeaths <- joined_df %>%
+  filter(week_st >= alphawave_st & week_st <= alphawave_end) 
+totalalphadeaths <- sum(totalalphadeaths$deaths_weekly)
+
+paste("Total alpha wave deaths:", totalalphadeaths)
+
+paste("High group alpha deaths:", highgroupalphawavedeaths)
+
+paste("Low group alpha deaths:", lowgroupalphawavedeaths)
+
+paste("Deaths in lowest vaccinated group in counterfactual scenario:", lowgroupalphawavecounterfactual)
+
+paste("Lives saved if lowest vaccinated zip codes experienced same trend as highly vaccinated:", did_alphalivessaved)
+
+```
+
+```{r DID delta}
+
+lowdid_delta <- to_did_alpha %>%
+  filter(week_st == deltawave_end|week_st == deltawave_st, vax_group_alpha == n_labels_alpha[1])
+
+highdid_delta <- to_did_alpha %>%
+  filter(week_st == deltawave_end|week_st == deltawave_st, vax_group_alpha == n_labels_alpha[3])
+
+lowgroupdeltawavedeaths <- ((lowdid_delta$deaths_cumulative[2] - lowdid_delta$deaths_cumulative[1])*lowdid_delta$population/100000)[1]
+
+highgroupdeltawavedeaths <- ((highdid_delta$deaths_cumulative[2] - highdid_delta$deaths_cumulative[1])*highdid_delta$population/100000)[1]
+
+lowgroupdeltawavecounterfactual <- ((lowdid_delta$absdeaths_counterfactual[2] - lowdid_delta$absdeaths_counterfactual[1])*lowdid_delta$population/100000)[1]
+
+did_deltalivessaved <- lowgroupdeltawavedeaths - lowgroupdeltawavecounterfactual
+
+totaldeltadeaths <- joined_df %>%
+  filter(week_st >= deltawave_st & week_st <= deltawave_end) 
+totaldeltadeaths <- sum(totaldeltadeaths$deaths_weekly)
+
+paste("Total delta wave deaths:", totaldeltadeaths)
+
+paste("High group delta deaths:", highgroupdeltawavedeaths)
+
+paste("Low group delta deaths:", lowgroupdeltawavedeaths)
+
+paste("Deaths in lowest vaccinated group in counterfactual scenario:", lowgroupdeltawavecounterfactual)
+
+paste("Lives saved if lowest vaccinated zip codes experienced same trend as highly vaccinated:", did_deltalivessaved)
+
 ```
 
 # Model Fitting
 
-## Model 1:
+## Model 1: Parallel trends
 
 $log(Y_i)-log(pop_i)=\beta_{0i}+\beta_{1i}week+\beta_2wave+\beta_3wave*vaxleveldec$
 
-```{r modeling dataset}
+```{r modeling df dates}
 
-start <- secondwavepeak
-chngwave <- thirdwave_st
-end <- mdy("6/14/21")
+start_alphadf <- secondwavepeak
+start_deltadf <- alphawavepeak
+chngwave_alpha <- alphawave_st
+chngwave_delta <- deltawave_st
+# end <- mdy("6/14/21")
 
-wave2 <- interval(start, thirdwave_st)
-wave3 <- interval(thirdwave_st, thirdwave_end)
+btwnwaves_alpha <- interval(start_alphadf, alphawave_st)
+btwnwaves_delta <- interval(start_deltadf, deltawave_st)
 
-chngwavenum <- (start %--% chngwave) %/% weeks(1) + 1
+alpha_int <- interval(alphawave_st, alphawave_end)
+delta_int <- interval(deltawave_st, deltawave_end)
 
-# Want to know cumulative % of first doses 6 weeks before peak of 3rd wave
-grouping_date <- mdy("3/28/21")
+chngwavenum_alpha <- (start_alphadf %--% chngwave_alpha) %/% weeks(1) + 1
+chngwavenum_delta <- (start_deltadf %--% chngwave_delta) %/% weeks(1) + 1
+```
 
-vaxlevel <- joined_df %>%
-  filter(week_st == grouping_date, population >= pop_limit) %>%
+```{r CDPH alpha modeling df}
+# Want to know cumulative % of first doses 6 weeks before peak of alpha wave
+
+vaxlevel_zip_alpha <- joined_df %>%
+  filter(week_st == alpha_grouping_date & !zip %in% outliers$zip) %>% 
   # deciles 
-  mutate(vaxleveldec = cumulative_pct_first / 10,
-         completeleveldec = cumulative_pct_complete / 10,
-         recoveredleveldec = (cases_cumulative - deaths_cumulative)/population * 10) %>%
-  dplyr::select(zip, population, vaxleveldec, recoveredleveldec, completeleveldec)
+  mutate(alpha_vaxleveldec = cumulative_pct_first / 10,
+         alpha_completeleveldec = cumulative_pct_complete / 10,
+         alpha_recoveredleveldec = (cases_cumulative - deaths_cumulative)/population * 10) %>%
+  dplyr::select(zip, population, alpha_vaxleveldec, alpha_recoveredleveldec, alpha_completeleveldec)
 
 age_by_zip <- demo_by_zip %>%
   rename(pop65plus = `Population - Age 65+`) %>%
@@ -1191,13 +1415,16 @@ age_by_zip <- demo_by_zip %>%
   filter(population >= pop_limit) %>%
   dplyr::select(zip, dec65plus)
 
-mixedeffectsdf <- joined_df %>%
-  filter(week_st >= start, population >= pop_limit) %>%
+# alpha
+
+mixedeffectsdf_alpha_zip <- joined_df %>%
+  filter(week_st >= start_alphadf) %>%
   # reindex weeks to be since beginning of 3rd wave
   mutate(week = week-min(week),
-         wave = case_when(week_st %within% wave2 ~ 0,
-                          week_st %within% wave3 ~ 1)) %>%
-  left_join(vaxlevel) %>% 
+         wave = case_when(week_st %within% btwnwaves_alpha ~ 0,
+                          week_st %within% alpha_int ~ 1,
+                          )) %>%
+  left_join(vaxlevel_zip_alpha) %>% 
   left_join(age_by_zip) %>%
   dplyr::group_by(wave) %>%
   mutate(wave_week = week - min(week)) %>%
@@ -1205,185 +1432,395 @@ mixedeffectsdf <- joined_df %>%
   mutate(deaths_wave = max(deaths_cumulative) - min(deaths_cumulative)) %>%
   arrange(week_st) %>%
   dplyr::group_by(zip) %>%
-  mutate(vaxleveldeclag = dplyr::lag(cumulative_pct_complete, 6)/10) %>%
-  ungroup () %>%
+  mutate(vaxleveldeclag = dplyr::lag(cumulative_pct_first, 6)/10) %>%
+  ungroup() %>%
   filter(is.na(wave) == FALSE) %>%
-  left_join(groupsabbr) %>%
-  mutate(vax_group = relevel(vax_group , ref = n_labels[n_groups]))
+  left_join(dplyr::select(alpha_groups, c(zip, vax_group_alpha))) %>%
+  mutate(vax_group_alpha = relevel(vax_group_alpha, ref = n_labels_alpha[n_groups]))
+```
 
-write.csv(mixedeffectsdf, "mixedeffectsdf.csv")
+```{r CDPH delta modeling df}
+
+# Delta
+
+vaxlevel_zip_delta <- joined_df %>%
+  filter(week_st == delta_grouping_date & !zip %in% outliers$zip) %>% 
+  # deciles 
+  mutate(delta_vaxleveldec = cumulative_pct_first / 10,
+         delta_completeleveldec = cumulative_pct_complete / 10,
+         delta_recoveredleveldec = (cases_cumulative - deaths_cumulative)/population * 10) %>%
+  dplyr::select(zip, population, delta_vaxleveldec, delta_recoveredleveldec, delta_completeleveldec)
+
+mixedeffectsdf_delta_zip <- joined_df %>%
+  filter(week_st >= start_deltadf) %>%
+  # reindex weeks to be since beginning of 3rd wave
+  mutate(week = week-min(week),
+         wave = case_when(week_st %within% btwnwaves_delta ~ 0,
+                          week_st %within% delta_int ~ 1,
+                          )) %>%
+  left_join(vaxlevel_zip_delta) %>% 
+  left_join(age_by_zip) %>%
+  dplyr::group_by(wave) %>%
+  mutate(wave_week = week - min(week)) %>%
+  dplyr::group_by(wave, zip) %>%
+  mutate(deaths_wave = max(deaths_cumulative) - min(deaths_cumulative)) %>%
+  arrange(week_st) %>%
+  dplyr::group_by(zip) %>%
+  mutate(vaxleveldeclag = dplyr::lag(cumulative_pct_first, 6)/10) %>%
+  ungroup() %>%
+  filter(is.na(wave) == FALSE) %>%
+  left_join(dplyr::select(delta_groups, c(zip, vax_group_delta))) %>%
+  mutate(vax_group_delta = relevel(vax_group_delta, ref = n_labels_delta[n_groups]))
 
 ```
 
-```{r model 1 parallel slope test}
+### eTABLE 4: Model 1 (Test for parallel trends)
 
-model1 <- glm(data = filter(mixedeffectsdf, wave == 0), deaths_weekly ~ week*vax_group + offset(log(population)), family = poisson(link = "log"))
+```{r}
 
-tab_model(model1, transform = NULL, show.ci = FALSE, show.se = TRUE)
+# alpha
 
-linearHypothesis(model1, c("week:vax_group[17.8, 26.9] = 0", "week:vax_group[27.6, 39.4] = 0"))
+model1_alpha_zip <- glm(data = filter(mixedeffectsdf_alpha_zip, wave == 0), deaths_weekly ~ week*vax_group_alpha + offset(log(population)), family = poisson(link = "log"))
 
-```
+tab_model(model1_alpha_zip, transform = NULL, show.ci = FALSE, show.se = TRUE)
 
-## Model 2
+linearHypothesis(model1_alpha_zip, c("week:vax_group_alphaLeast vaccinated quartile = 0", "week:vax_group_alphaMiddle 25-75% = 0"))
 
-```{r model 2 mixed effects}
-# Random effects on intercept from zip and week
-model2 <- glmer(data = mixedeffectsdf, deaths_weekly ~ (1 + week|zip) + week + wave + wave:vaxleveldec + offset(log(population)), family = poisson(link = "log"))
-
-model2
-
-model2noslope <- glmer(data = mixedeffectsdf, deaths_weekly ~ (1|zip) + week + wave + wave:vaxleveldec + offset(log(population)), family = poisson(link = "log"))
-
-model2noslope
-
-# Mixed-Effects Model Visualization
-# ggpredict(model1, terms = c("wave", "zip"), type = "random") %>%
-#   ggplot(aes(x = x, 
-#              y = predicted, 
-#              color = group)) +
-#   geom_line() +
-#   labs(y = "Fitted Weekly Deaths",
-#        x = "Week",
-#        color = "ZIP")
-```
-
-Model 2b: 6-week lag on vaccination effect
-
-```{r model2b vax level 6 weeks prior}
-
-model2b <- glmer(data = mixedeffectsdf, deaths_weekly ~ (1|zip) + week + wave + wave:vaxleveldeclag + offset(log(population)), family = poisson(link = "log"))
-
-model2b
 
 ```
 
-## Model 3:
+## Model 2 Mixed Effects
+
+### TABLE 2 + eTABLE 5 (unadjusted)
+
+```{r}
+
+# Random effects on intercept from zip (starting at different peaks during wave 0)
+
+# alpha (Zip)
+
+model2_alpha_zip <- glmer(data = mixedeffectsdf_alpha_zip, deaths_weekly ~ (1|zip) + week + wave + wave:alpha_vaxleveldec + offset(log(population)), family = poisson(link = "log"))
+
+model2_alpha_zip
+
+# Delta (Zip)
+
+model2_delta_zip <- glmer(data = mixedeffectsdf_delta_zip, deaths_weekly ~ (1|zip) + week + wave + wave:delta_vaxleveldec + offset(log(population)), family = poisson(link = "log"))
+
+model2_delta_zip
+
+```
+
+
+
+## Model 3 (with recovered and aging):
 
 $log(Y_i)-log(pop_i)=\beta_{0i}+\beta_{1i}week+\beta_2wave+\beta_3wave*vaxleveldec+\beta_4recoveredleveldec+\beta_5dec65plus$
 
-```{r model 3 recovered and aging and IRRS}
+### Model 3: TABLE 2 + eTABLE 5 (adjusted)
 
-# not sure how to account for people who were recovered + vaccinated
+```{r}
 
-model3 <- glmer(data = mixedeffectsdf, deaths_weekly ~ (1|zip) + week + wave + wave:vaxleveldec + recoveredleveldec + dec65plus + offset(log(population)), family = poisson(link = "log"))
+# alpha Zip
 
-model3
+model3_alpha_zip <- glmer(data = mixedeffectsdf_alpha_zip, deaths_weekly ~ (1|zip) + week + wave + wave:alpha_vaxleveldec + alpha_recoveredleveldec + dec65plus + offset(log(population)), family = poisson(link = "log"))
 
-# Wave IRR with mean values
+model3_alpha_zip
 
-paste("Wave IRR with mean vaccination level (Model 2 no slope):", exp(fixef(model2noslope)[3] + 
-      fixef(model2noslope)[4]*mean(vaxlevel$vaxleveldec)))
+# Delta Zip
 
-paste("Wave IRR with mean vaccination level (Model 3):", exp(fixef(model3)[3] + 
-      fixef(model3)[6]*mean(vaxlevel$vaxleveldec)))
+model3_delta_zip <- glmer(data = mixedeffectsdf_delta_zip, deaths_weekly ~ (1|zip) + week + wave + wave:delta_vaxleveldec + delta_recoveredleveldec + dec65plus + offset(log(population)), family = poisson(link = "log"))
 
-# Week IRR with median values
-
-paste("Week IRR with mean vaccination level (Model 2 no slope):", exp(fixef(model2noslope)[2] + 
-      fixef(model2noslope)[4]*mean(vaxlevel$vaxleveldec)))
-
-paste("Week IRR with mean vaccination level (Model 3):", exp(fixef(model3)[2] + 
-      fixef(model3)[6]*mean(vaxlevel$vaxleveldec)))
+model3_delta_zip
 
 ```
 
-Model 3b: 
+```{r models 2 and 3 in tables}
 
-```{r model3c vax level groups}
+# alpha zip
 
-model3b <- glmer(data = mixedeffectsdf, deaths_weekly ~ (1|zip) + week + wave + wave:vax_group + recoveredleveldec + dec65plus + offset(log(population)), family = poisson(link = "log"))
+tab_model(model2_alpha_zip, model3_alpha_zip,
+title = "Table 2: Multivariable analysis of risk reduction in deaths from COVID-19, by vaccinations before alpha wave (alpha, zip)")
 
-tab_model(model3b, transform = NULL, show.ci = FALSE, show.se = TRUE)
+tab_model(model2_alpha_zip, model3_alpha_zip, transform = NULL, show.ci = FALSE, show.se = TRUE)
+
+paste("Wave IRR with mean vaccination level (Model 2 alpha zip):", (exp(fixef(model2_alpha_zip)[3] + 
+      fixef(model2_alpha_zip)[4]*mean(vaxlevel_zip_alpha$alpha_vaxleveldec))))
+
+paste("Week IRR with mean vaccination level (Model 2 alpha zip):", exp(fixef(model2_alpha_zip)[2] + 
+      fixef(model2_alpha_zip)[4]*mean(vaxlevel_zip_alpha$alpha_vaxleveldec)))
+
+paste("Wave IRR with mean vaccination level (Model 3 alpha zip):", (exp(fixef(model3_alpha_zip)[3] + 
+      fixef(model3_alpha_zip)[6]*mean(vaxlevel_zip_alpha$alpha_vaxleveldec))))
+
+paste("Week IRR with mean vaccination level (Model 3 alpha zip):", exp(fixef(model3_alpha_zip)[2] + 
+      fixef(model3_alpha_zip)[6]*mean(vaxlevel_zip_alpha$alpha_vaxleveldec)))
+
+# delta zip
+
+tab_model(model2_delta_zip, model3_delta_zip,
+title = "Table 2: Multivariable analysis of risk reduction in deaths from COVID-19, by vaccinations before delta wave (delta, zip)")
+
+tab_model(model2_delta_zip, model3_delta_zip, transform = NULL, show.ci = FALSE, show.se = TRUE)
+
+
+paste("Wave IRR with mean vaccination level (Model 2 delta zip):", (exp(fixef(model2_delta_zip)[3] + 
+      fixef(model2_delta_zip)[4]*mean(vaxlevel_zip_delta$delta_vaxleveldec))))
+
+paste("Week IRR with mean vaccination level (Model 2 delta zip):", exp(fixef(model2_delta_zip)[2] + 
+      fixef(model2_delta_zip)[4]*mean(vaxlevel_zip_delta$delta_vaxleveldec)))
+
+paste("Wave IRR with mean vaccination level (Model 3 delta zip):", (exp(fixef(model3_delta_zip)[3] + 
+      fixef(model3_delta_zip)[6]*mean(vaxlevel_zip_delta$delta_vaxleveldec))))
+
+paste("Week IRR with mean vaccination level (Model 3 delta zip):", exp(fixef(model3_delta_zip)[2] + 
+      fixef(model3_delta_zip)[6]*mean(vaxlevel_zip_delta$delta_vaxleveldec)))
 
 ```
 
-IRRs
-```{r tab model}
+### Model 3b (with vax groups) - eTABLE 6: Sensitivity analysis
 
-tab_model(model2noslope, model3,
-title = "Table 2: Multivariable analysis of risk reduction in deaths from COVID-19, by vaccinations before third wave")
+```{r}
 
-tab_model(model2noslope, model3, transform = NULL, show.ci = FALSE, show.se = TRUE)
+# alpha zip
 
-paste("Wave IRR with mean vaccination level (Model 3c groups):", (exp(fixef(model3b)[3] + 
-      fixef(model3b)[7])))
+model3b_alpha_zip <- glmer(data = mixedeffectsdf_alpha_zip, deaths_weekly ~ (1|zip) + week + wave + wave:vax_group_alpha + alpha_recoveredleveldec + dec65plus + offset(log(population)), family = poisson(link = "log"))
 
-paste("Week IRR with mean vaccination level (Model 3):", exp(fixef(model3)[2] + 
-      fixef(model3)[6]*mean(vaxlevel$vaxleveldec)))
+# delta zip
+
+model3b_delta_zip <- glmer(data = mixedeffectsdf_delta_zip, deaths_weekly ~ (1|zip) + week + wave + wave:vax_group_delta + delta_recoveredleveldec + dec65plus + offset(log(population)), family = poisson(link = "log"))
+
+tab_model(model3b_alpha_zip, model3b_delta_zip, transform = NULL)
+
+tab_model(model3b_alpha_zip, model3b_delta_zip)
 
 ```
 
 vaxleveldec = 10% increase in people with first doses out of entire population; recoveredleveldec = 10% increase in recovered from COVID-19 out of entire population; dec65plus = 10% increase in people over 65 years old out of entire population
 
-```{r model 4 complete vax}
+## eTABLE 6 Sensitivity analysis - Model 4: Levels of fully vaccinated
 
-model4 <- glmer(data = mixedeffectsdf, deaths_weekly ~ (1|zip) + week + wave + wave:completeleveldec + recoveredleveldec + dec65plus + offset(log(population)), family = poisson(link = "log"))
+```{r}
 
-tab_model(model4, transform = NULL, show.ci = FALSE, show.se = TRUE)
+# alpha zip
 
-paste("Wave IRR with mean vaccination level (Model 4):", exp(fixef(model3)[3] + 
-      fixef(model3)[6]*mean(vaxlevel$completeleveldec)))
+model4_alpha_zip <- glmer(data = mixedeffectsdf_alpha_zip, deaths_weekly ~ (1|zip) + week + wave + wave:alpha_completeleveldec + alpha_recoveredleveldec + dec65plus + offset(log(population)), family = poisson(link = "log"))
 
-# Week IRR with median values
+# delta zip
 
-paste("Week IRR with mean vaccination level (Model 4):", exp(fixef(model4)[2] + 
-      fixef(model4)[6]*mean(vaxlevel$completeleveldec)))
+model4_delta_zip <- glmer(data = mixedeffectsdf_delta_zip, deaths_weekly ~ (1|zip) + week + wave + wave:delta_completeleveldec + delta_recoveredleveldec + dec65plus + offset(log(population)), family = poisson(link = "log"))
+
+tab_model(model4_alpha_zip, model4_delta_zip, transform = NULL, show.ci = FALSE, show.se = TRUE)
+
+tab_model(model4_alpha_zip, model4_delta_zip)
+
+```
+
+# SUPPLEMENT: Census Tract-Level Data
+
+
+
+```{r ME data check}
+
+# Check against CDPH data
+
+paste0(c("Deaths with Chicago listed as residence:", 
+        as.character(length(filter(ME_covid_deaths,`Residence City` == "CHICAGO" | `Residence City` == "Chicago")$`Case Number`))))
+
+paste0(c("Deaths with Chicago listed as incidence:", 
+        as.character(length(filter(ME_covid_deaths,`Incident City` == "CHICAGO" | `Incident City` == "Chicago")$`Case Number`))))
+
+paste0(c("Deaths with Chicago listed as residence or incidence:", 
+        as.character(length(filter(ME_covid_deaths,`Incident City` == "CHICAGO" | `Incident City` == "Chicago" | `Residence City` == "CHICAGO" | `Residence City` == "Chicago")$`Case Number`))))
+
+# alpha comparison
+
+ME_covid_deaths_alphaperiod <- filter(ME_covid_deaths_clean, week_st >= secondwavepeak, week_st <= alphawave_end)
+
+paste0(c("Deaths with Chicago listed as incidence with valid address during alpha period:", 
+        as.character(length(filter(ME_covid_deaths_alphaperiod,`Incident City` == "CHICAGO" | `Incident City` == "Chicago")$`Case Number`))))
+
+paste0(c("Deaths in CDPH dataset during alpha period:", 
+        sum(filter(covid_by_zip, week_st >= secondwavepeak, week_st <= alphawave_end)$`Deaths - Weekly`)))
+
+# Delta comparison 
+
+ME_covid_deaths_deltaperiod <- filter(ME_covid_deaths_clean, week_st >= alphawavepeak, week_st <= deltawave_end)
+
+paste0(c("Deaths with Chicago listed as incidence with valid address during delta period:", 
+        as.character(length(filter(ME_covid_deaths_deltaperiod,`Incident City` == "CHICAGO" | `Incident City` == "Chicago")$`Case Number`))))
+
+paste0(c("Deaths in CDPH dataset during delta period:", 
+        sum(filter(covid_by_zip, week_st >= alphawavepeak, week_st <= deltawave_end)$`Deaths - Weekly`)))
+
+paste0(c("Missing deaths in ME dataset (not accounting for geocoding issues):", 
+        sum(covid_by_zip$`Deaths - Weekly`)-length(filter(ME_covid_deaths,`Incident City` == "CHICAGO" | `Incident City` == "Chicago")$`Case Number`)))
+
+mecoviddeathcheck <- ME_covid_deaths_clean %>%
+  mutate(week_st = floor_date(death_date, unit = "weeks", week_start = 7)) %>%
+  filter(week_st <= rightdate_cutoff) %>%
+  count(week_st, `Incident Zip Code`) %>%
+  rename(zip = `Incident Zip Code`)
+
+hospitalcheck <- ME_covid_deaths_clean %>%
+  filter(`Incident City` == "Chicago" | `Incident City` == "CHICAGO") %>%
+  mutate(location = as.character(location)) %>%
+  dplyr::select(location, `Incident Address`) %>%
+  st_drop_geometry()
+
+hospitalcheck2 <- hospitalcheck %>%
+  count(location) %>%
+  left_join(distinct(hospitalcheck, location, .keep_all = TRUE))
+
+# googled addresses with multiple deaths:
+
+# 2544 W Montrose - Kindred Hospital Acute Care (5 deaths)
+
+# 2751 W Winona - Swedish Hospital (7 deaths)
+
+# 2900 N Lake Shore - AMITA Health Saint Joseph Hospital (3 deaths)
+
+# quantify difference between CDPH and ME datasets
+CDPH_ME_joined <- covid_by_zip %>%
+  filter(zip != "60827" & zip != "60707" & zip != "60602" & zip != "60603" & zip != "60604" & zip != "60606" & zip != "60666") %>%
+  filter(week_st <= alphawave_end & week_st > alphawave_st) %>%
+  arrange(week_st, zip) %>%
+  dplyr::select(c(week_st, zip, `Deaths - Weekly`)) %>%
+  rename(CDPH_n = `Deaths - Weekly`) %>%
+  mutate(zip = as.double(zip)) %>%
+  left_join(mecoviddeathcheck) %>%
+  mutate(n = replace_na(n, 0)) %>%
+  dplyr::select(-geometry)
+
+paste0(c("Deaths in CDPH dataset:", as.character(sum(CDPH_ME_joined$CDPH_n))))
+paste0(c("Deaths in ME dataset with valid incident locations:", as.character(sum(CDPH_ME_joined$n))))
+
+# plot difference between CDPH and ME datasets
+
+CDPH_ME_joined %>%
+  mutate(zip = as.character(zip)) %>%
+  left_join(zips_sf) %>%
+  dplyr::group_by(zip) %>%
+  summarise(ME_n = sum(n), CDPH_n = sum(CDPH_n), geometry = geometry) %>%
+  unique() %>%
+  mutate(diff = CDPH_n-ME_n) %>%
+  ggplot() +
+  geom_sf(aes(geometry = geometry, fill = diff)) +
+  scale_fill_distiller(palette = "RdBu") +
+  labs(fill = "CDPH deaths - ME deaths \n (entire alpha wave)") +
+  theme_dark()
+  
+```
+
+```{r zip and tract overlap}
+
+zcta_tracts <- read_csv("ZIP_TRACT_122019.csv") %>%
+  rename(GEOID = TRACT, zip = ZIP) %>%
+  inner_join(dplyr::select(demo_by_zip, c(zip, population, `Population - Age 65+`))) %>%
+  rename(population_zip = population, pop65plus_zip = `Population - Age 65+`) %>%
+  filter(!zip %in% outliers$zip) %>%
+  # multiplying by overlap of addresses (including residential and business, so that each census tract has a population)
+  mutate(population_overlap = population_zip * TOT_RATIO, GEOID = as.character(GEOID),
+         pop65plus_tract = pop65plus_zip * TOT_RATIO)
+
+all_tracts <- zcta_tracts %>%
+  right_join(dplyr::select(joined_df, c(week_st, zip)))
+
+ME_by_tract <- ME_to_map %>%
+  as.data.frame() %>%
+  dplyr::select(-geometry) %>%
+  count(week_st, GEOID, zip) %>%
+  mutate(zip = as.character(zip)) %>%
+  right_join(all_tracts) %>%
+  mutate(deaths_weekly = replace_na(n, 0),
+         overlap_group = paste0(GEOID, "_", zip))
+
+```
+
+```{r ME alpha modeling df}
+
+mixedeffectsdf_alpha_tract <- ME_by_tract %>%
+  left_join(dplyr::select(joined_df, week, zip, week_st)) %>%
+  filter(week_st >= start_alphadf) %>%
+  # reindex weeks to be since beginning of alpha wave
+  mutate(week = week-min(week),
+         wave = case_when(week_st %within% btwnwaves_alpha ~ 0,
+                          week_st %within% alpha_int ~ 1,
+                          )) %>%
+  left_join(vaxlevel_zip_alpha) %>% 
+  left_join(age_by_zip) %>%
+  # remove zip population variable and rename population_overlap to make it easier to repeat models on different datasets
+  dplyr::select(-population) %>%
+  rename(population = population_overlap) %>%
+  dplyr::group_by(wave) %>%
+  mutate(wave_week = week - min(week)) %>%
+  dplyr::group_by(wave, zip) %>%
+  mutate(deaths_wave = sum(deaths_weekly)) %>%
+  arrange(week_st) %>%
+  filter(is.na(wave) == FALSE) %>%
+  left_join(dplyr::select(alpha_groups, c(zip, vax_group_alpha))) %>%
+  mutate(vax_group_alpha = relevel(vax_group_alpha, ref = n_labels_alpha[n_groups]))
+  
+```
+
+```{r ME delta modeling df}
+
+mixedeffectsdf_delta_tract <- ME_by_tract %>%
+  left_join(dplyr::select(joined_df, week, zip, week_st)) %>%
+  filter(week_st >= start_deltadf) %>%
+  # reindex weeks to be since beginning of delta wave
+  mutate(week = week-min(week),
+         wave = case_when(week_st %within% btwnwaves_delta ~ 0,
+                          week_st %within% delta_int ~ 1,
+                          )) %>%
+  left_join(vaxlevel_zip_delta) %>% 
+  left_join(age_by_zip) %>%
+  # remove zip population variable and rename population_overlap to make it easier to repeat models on different datasets
+  dplyr::select(-population) %>%
+  rename(population = population_overlap) %>%
+  dplyr::group_by(wave) %>%
+  mutate(wave_week = week - min(week)) %>%
+  dplyr::group_by(wave, zip) %>%
+  mutate(deaths_wave = sum(deaths_weekly)) %>%
+  arrange(week_st) %>%
+  filter(is.na(wave) == FALSE) %>%
+  left_join(dplyr::select(delta_groups, c(zip, vax_group_delta))) %>%
+  mutate(vax_group_delta = relevel(vax_group_delta, ref = n_labels_delta[n_groups]))
+  
+```
+
+## alpha tract (models 2 and 3)
+
+```{r}
+
+# Random effects on intercept from zip (starting at different peaks during wave 0)
+
+# alpha (tract)
+
+model2_alpha_tract <- glmer(data = mixedeffectsdf_alpha_tract, deaths_weekly ~ (1|overlap_group) + week + wave + wave:alpha_vaxleveldec + offset(log(population)), family = poisson(link = "log"))
+
+model3_alpha_tract <- glmer(data = mixedeffectsdf_alpha_tract, deaths_weekly ~ (1|overlap_group) + week + wave + wave:alpha_vaxleveldec + alpha_recoveredleveldec + dec65plus + offset(log(population)), family = poisson(link = "log"))
+
+tab_model(model2_alpha_tract, model3_alpha_tract, transform = NULL, show.ci = FALSE, show.se = TRUE)
+
+tab_model(model2_alpha_tract, model3_alpha_tract, transform = "exp")
+
+```
+
+## Delta (models 2 and 3)
+
+```{r}
+
+# Delta (tract)
+
+model2_delta_tract <- glmer(data = mixedeffectsdf_delta_tract, deaths_weekly ~ (1|overlap_group) + week + wave + wave:delta_vaxleveldec + offset(log(population)), family = poisson(link = "log"))
+
+model3_delta_tract <- glmer(data = mixedeffectsdf_delta_tract, deaths_weekly ~ (1|overlap_group) + week + wave + wave:delta_vaxleveldec + delta_recoveredleveldec + dec65plus + offset(log(population)), family = poisson(link = "log"))
+
+tab_model(model2_delta_tract, model3_delta_tract, transform = NULL, show.ci = FALSE, show.se = TRUE)
+
 ```
 
 
-```{r model 3 did}
 
-diddata <- mixedeffectsdf %>% 
-  arrange(vaxleveldec) %>%
-  mutate(vaxleveldec = rev(vaxleveldec))
-
-didsim <- simulate(model3, newdata = diddata)
-
-diddata <- cbind(diddata, didsim)
-
-model3did <- groups %>%
-  dplyr::group_by(vax_group) %>%
-  mutate(group_pop = sum(population)) %>%
-  ungroup() %>%
-  dplyr::select(vax_group, zip, group_pop) %>%
-  left_join(diddata) %>%
-  dplyr::group_by(vax_group, week) %>%
-  dplyr::summarise(death_rate_weekly = sum(deaths_weekly)*100000/group_pop,
-            diddeath_rate_weekly = sum(sim_1)*100000/group_pop,
-            population = group_pop) %>%
-  ungroup() %>%
-  unique() %>%
-  arrange(week) %>%
-  dplyr::group_by(vax_group) %>%
-  mutate(rollingavgdeathrate = zoo::rollmean(death_rate_weekly, k, fill = NA)) %>%
-  ungroup()
-
-model3didplot <- ggplot(data = model3did) +
-  geom_line(aes(x = week, y = rollingavgdeathrate, color = vax_group), alpha = 0.5) +
-  geom_point(aes(x = week, y = diddeath_rate_weekly, fill = vax_group, shape = vax_group), size = 3) +
-  scale_fill_manual(values = graphcolors) +
-  scale_color_manual(values = graphcolors) +
-  scale_shape_manual(values = graphshapes) +
-  theme_bw() +
-  labs(title = "DID with model 2", paste("Predicted values from flipped", group_legend), color = group_legend, fill = paste("Predicted values from flipped", group_legend),
-       y = "Weekly Mortality Rate (per 100,000 population)", x = "Weeks since 10/24/20")
-
-model3didplot
-
-# Lives saved under flipped allocation before 3rd wave
-
-sim_1 <- diddata %>%
-  dplyr::group_by(week) %>%
-  dplyr::summarise(sim_1 = sum(sim_1)) %>%
-  filter(week >= chngwavenum)
-
-# Estimated number of deaths if low zip codes had gotten high vaccination level using area under curve
-AUC(sim_1$week, sim_1$sim_1, method = "trapezoid")
-
-test <- mixedeffectsdf %>%
-  filter(week == max(week), wave == 1) %>%
-  mutate(deaths_wave = sum(deaths_wave))
-
-test$deaths_wave[1]
 ```
