@@ -66,7 +66,7 @@ Data from the Chicago Department of Public Health (CDPH)
 * [Chicago population counts](https://data.cityofchicago.org/Health-Human-Services/Chicago-Population-Counts/85cm-7uqa)
 * [Demographics in zip codes (U.S. Census Bureau, 2019 ACS 5-year estimates)](https://data.cityofchicago.org/Health-Human-Services/Chicago-Population-Counts/85cm-7uqa)
 * [More ZCTA demographics (U.S. Census Bureau, 2019 ACS 5-year estimates - Economic and Social Characteristics)](https://www.census.gov/acs/www/data/data-tables-and-tools/data-profiles/)
-* [Zip code and census tract overlap for population estimates (HUD PD&R)](https://www.huduser.gov/portal/datasets/usps_crosswalk.html)
+* [Zip code and census tract overlap for population estimates (HUD PD&R) ZIP-TRACT 4th quarter 2019, downloaded 1/16/22](https://www.huduser.gov/portal/datasets/usps_crosswalk.html)
 
 ```{r zip geometry}
 #zip_codes <- zctas(cb = TRUE, class = "sf")
@@ -743,11 +743,7 @@ ggsave("delta_groupingmap.png", delta_grouping_map, height = 7, width = 7)
 
 ```{r table 1 data import}
 
-demo_by_zip <- read_csv("https://data.cityofchicago.org/api/views/85cm-7uqa/rows.csv?accessType=DOWNLOAD") %>%
-  filter(`Geography Type` != "Citywide", Year == 2019) %>%
-  rename(zip = Geography, population = `Population - Total`) %>%
-  mutate(zip = as.character(zip)) %>%
-  dplyr::select(-`Geography Type`, -`Record ID`) %>%
+demo_by_zip <- demo_by_zip %>%
   mutate(`Population - Age 18-65` = `Population - Age 18+` - `Population - Age 65+`) %>%
   dplyr::select(!`Population - Age 18-29`:`Population - Age 18+`) %>%
   relocate(`Population - Age 18-65`, .after = `Population - Age 0-17`) %>%
