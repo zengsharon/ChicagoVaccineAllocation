@@ -148,15 +148,11 @@ write.csv(vax_by_zip, "vax_by_zip.csv")
 
 vax_by_zip <- vax_by_zip %>%
   #only keep 1 row per week
-  dplyr:: select(zip, week_st, cumulative_doses, cumulative_first, cumulative_complete, cumulative_pct_first, cumulative_pct_complete, doses_weekly, first_weekly, `1st Dose - Cumulative`, `Population`) %>%
+  dplyr:: select(zip, week_st, cumulative_doses, cumulative_first, cumulative_complete, cumulative_pct_first, cumulative_pct_complete, doses_weekly, first_weekly, `1st Dose - Cumulative`) %>%
   filter(`1st Dose - Cumulative`== cumulative_first) %>%
   dplyr:: select(-`1st Dose - Cumulative`) %>%
   distinct() %>%
-  rename(population = `Population`) %>%
-  arrange(week_st, zip) %>%
-  mutate(population = case_when(zip == "60827" ~ 28483,
-                                zip == "60707" ~ 43093,
-                                TRUE ~ as.numeric(population)))
+  arrange(week_st, zip)
 
 #define rollout phases
 vax_by_zip <- vax_by_zip %>%
@@ -665,7 +661,6 @@ vaxmapstyle <- list(geom_sf_text_repel(aes(label = zip),
     theme_void(), coord_sf(), 
     scale_fill_distiller(trans = "reverse", limits = c(max(groups_tbl$pct_first_delta), min(groups_tbl$pct_first_alpha))),
     scale_color_manual(values = mapcolorscustom),
-    labs(color = "Vaccination Group"),
     theme(legend.position = "right", 
         plot.title = element_text(hjust = 0.5),
         legend.title = element_text(size = 10, face = "bold"),
@@ -677,7 +672,7 @@ alphavaxmap <- left_join(alpha_groups, zips_sf) %>%
   ggplot(aes(geometry = geometry)) + 
     geom_sf(aes(fill = pct_first_alpha)) +
     vaxmapstyle +
-  labs(fill = alpha_group_legend)
+  labs(fill = paste0("% of Population with First Doses\n(", alpha_grouping_date_chr, ")"))
 
 alphavaxmap
 
@@ -1368,6 +1363,8 @@ paste("Deaths in lowest vaccinated group in counterfactual scenario:", lowgroupd
 
 paste("Lives saved if lowest vaccinated zip codes experienced same trend as highly vaccinated:", did_deltalivessaved)
 
+
+
 ```
 
 # Model Fitting
@@ -1405,6 +1402,22 @@ vaxlevel_zip_alpha <- joined_df %>%
          alpha_recoveredleveldec = (cases_cumulative - deaths_cumulative)/population * 10) %>%
   dplyr::select(zip, population, alpha_vaxleveldec, alpha_recoveredleveldec, alpha_completeleveldec)
 
+vaxlevel_zip_alpha_2weeks <- joined_df %>%
+  filter(week_st == alpha_grouping_date+28 & !zip %in% outliers$zip) %>% 
+  # deciles 
+  mutate(alpha_vaxleveldec2weeks = cumulative_pct_first / 10,
+         alpha_completeleveldec2weeks = cumulative_pct_complete / 10,
+         alpha_recoveredleveldec2weeks = (cases_cumulative - deaths_cumulative)/population * 10) %>%
+  dplyr::select(zip, population, alpha_vaxleveldec2weeks, alpha_recoveredleveldec2weeks, alpha_completeleveldec2weeks)
+
+vaxlevel_zip_alpha_8weeks <- joined_df %>%
+  filter(week_st == alpha_grouping_date-14 & !zip %in% outliers$zip) %>% 
+  # deciles 
+  mutate(alpha_vaxleveldec8weeks = cumulative_pct_first / 10,
+         alpha_completeleveldec8weeks = cumulative_pct_complete / 10,
+         alpha_recoveredleveldec8weeks = (cases_cumulative - deaths_cumulative)/population * 10) %>%
+  dplyr::select(zip, population, alpha_vaxleveldec8weeks, alpha_recoveredleveldec8weeks, alpha_completeleveldec8weeks)
+
 age_by_zip <- demo_by_zip %>%
   rename(pop65plus = `Population - Age 65+`) %>%
   mutate(dec65plus = pop65plus/population * 10) %>%
@@ -1421,6 +1434,8 @@ mixedeffectsdf_alpha_zip <- joined_df %>%
                           week_st %within% alpha_int ~ 1,
                           )) %>%
   left_join(vaxlevel_zip_alpha) %>% 
+  left_join(vaxlevel_zip_alpha_2weeks) %>%
+  left_join(vaxlevel_zip_alpha_8weeks) %>%
   left_join(age_by_zip) %>%
   dplyr::group_by(wave) %>%
   mutate(wave_week = week - min(week)) %>%
@@ -1428,7 +1443,6 @@ mixedeffectsdf_alpha_zip <- joined_df %>%
   mutate(deaths_wave = max(deaths_cumulative) - min(deaths_cumulative)) %>%
   arrange(week_st) %>%
   dplyr::group_by(zip) %>%
-  mutate(vaxleveldeclag = dplyr::lag(cumulative_pct_first, 6)/10) %>%
   ungroup() %>%
   filter(is.na(wave) == FALSE) %>%
   left_join(dplyr::select(alpha_groups, c(zip, vax_group_alpha))) %>%
@@ -1447,6 +1461,22 @@ vaxlevel_zip_delta <- joined_df %>%
          delta_recoveredleveldec = (cases_cumulative - deaths_cumulative)/population * 10) %>%
   dplyr::select(zip, population, delta_vaxleveldec, delta_recoveredleveldec, delta_completeleveldec)
 
+vaxlevel_zip_delta_2weeks <- joined_df %>%
+  filter(week_st == delta_grouping_date+28 & !zip %in% outliers$zip) %>% 
+  # deciles 
+  mutate(delta_vaxleveldec2weeks = cumulative_pct_first / 10,
+         delta_completeleveldec2weeks = cumulative_pct_complete / 10,
+         delta_recoveredleveldec2weeks = (cases_cumulative - deaths_cumulative)/population * 10) %>%
+  dplyr::select(zip, population, delta_vaxleveldec2weeks, delta_recoveredleveldec2weeks, delta_completeleveldec2weeks)
+
+vaxlevel_zip_delta_8weeks <- joined_df %>%
+  filter(week_st == delta_grouping_date-14 & !zip %in% outliers$zip) %>% 
+  # deciles 
+  mutate(delta_vaxleveldec8weeks = cumulative_pct_first / 10,
+         delta_completeleveldec8weeks = cumulative_pct_complete / 10,
+         delta_recoveredleveldec8weeks = (cases_cumulative - deaths_cumulative)/population * 10) %>%
+  dplyr::select(zip, population, delta_vaxleveldec8weeks, delta_recoveredleveldec8weeks, delta_completeleveldec8weeks)
+
 mixedeffectsdf_delta_zip <- joined_df %>%
   filter(week_st >= start_deltadf) %>%
   # reindex weeks to be since beginning of 3rd wave
@@ -1455,6 +1485,8 @@ mixedeffectsdf_delta_zip <- joined_df %>%
                           week_st %within% delta_int ~ 1,
                           )) %>%
   left_join(vaxlevel_zip_delta) %>% 
+  left_join(vaxlevel_zip_delta_2weeks) %>%
+  left_join(vaxlevel_zip_delta_8weeks) %>%
   left_join(age_by_zip) %>%
   dplyr::group_by(wave) %>%
   mutate(wave_week = week - min(week)) %>%
@@ -1462,7 +1494,6 @@ mixedeffectsdf_delta_zip <- joined_df %>%
   mutate(deaths_wave = max(deaths_cumulative) - min(deaths_cumulative)) %>%
   arrange(week_st) %>%
   dplyr::group_by(zip) %>%
-  mutate(vaxleveldeclag = dplyr::lag(cumulative_pct_first, 6)/10) %>%
   ungroup() %>%
   filter(is.na(wave) == FALSE) %>%
   left_join(dplyr::select(delta_groups, c(zip, vax_group_delta))) %>%
@@ -1470,7 +1501,7 @@ mixedeffectsdf_delta_zip <- joined_df %>%
 
 ```
 
-### eTABLE 4: Model 1 (Test for parallel trends)
+### Model 1 (Test for parallel trends)
 
 ```{r}
 
@@ -1485,9 +1516,8 @@ linearHypothesis(model1_alpha_zip, c("week:vax_group_alphaLeast vaccinated quart
 
 ```
 
-## Model 2 Mixed Effects
 
-### TABLE 2 + eTABLE 5 (unadjusted)
+## Model 2 Mixed Effects (unadjusted)
 
 ```{r}
 
@@ -1512,8 +1542,6 @@ model2_delta_zip
 ## Model 3 (with recovered and aging):
 
 $log(Y_i)-log(pop_i)=\beta_{0i}+\beta_{1i}week+\beta_2wave+\beta_3wave*vaxleveldec+\beta_4recoveredleveldec+\beta_5dec65plus$
-
-### Model 3: TABLE 2 + eTABLE 5 (adjusted)
 
 ```{r}
 
@@ -1574,7 +1602,7 @@ paste("Week IRR with mean vaccination level (Model 3 delta zip):", exp(fixef(mod
 
 ```
 
-### Model 3b (with vax groups) - eTABLE 6: Sensitivity analysis
+### Sensitivity analysis: Model 3b (with vax groups)
 
 ```{r}
 
@@ -1594,7 +1622,7 @@ tab_model(model3b_alpha_zip, model3b_delta_zip)
 
 vaxleveldec = 10% increase in people with first doses out of entire population; recoveredleveldec = 10% increase in recovered from COVID-19 out of entire population; dec65plus = 10% increase in people over 65 years old out of entire population
 
-## eTABLE 6 Sensitivity analysis - Model 4: Levels of fully vaccinated
+### Sensitivity analysis - Model 4: Levels of fully vaccinated
 
 ```{r}
 
@@ -1609,6 +1637,40 @@ model4_delta_zip <- glmer(data = mixedeffectsdf_delta_zip, deaths_weekly ~ (1|zi
 tab_model(model4_alpha_zip, model4_delta_zip, transform = NULL, show.ci = FALSE, show.se = TRUE)
 
 tab_model(model4_alpha_zip, model4_delta_zip)
+
+```
+
+### Sensitivity Analysis - Model 3: Lag Time
+
+```{r}
+
+# alpha Zip
+
+model3_alpha_zip_2weeks <- glmer(data = mixedeffectsdf_alpha_zip, deaths_weekly ~ (1|zip) + week + wave + wave:alpha_vaxleveldec2weeks + alpha_recoveredleveldec2weeks + dec65plus + offset(log(population)), family = poisson(link = "log"))
+
+model3_alpha_zip_8weeks <- glmer(data = mixedeffectsdf_alpha_zip, deaths_weekly ~ (1|zip) + week + wave + wave:alpha_vaxleveldec8weeks + alpha_recoveredleveldec8weeks + dec65plus + offset(log(population)), family = poisson(link = "log"))
+
+# Delta Zip
+
+model3_delta_zip_2weeks <- glmer(data = mixedeffectsdf_delta_zip, deaths_weekly ~ (1|zip) + week + wave + wave:delta_vaxleveldec2weeks + delta_recoveredleveldec2weeks + dec65plus + offset(log(population)), family = poisson(link = "log"))
+
+model3_delta_zip_8weeks <- glmer(data = mixedeffectsdf_delta_zip, deaths_weekly ~ (1|zip) + week + wave + wave:delta_vaxleveldec8weeks + delta_recoveredleveldec8weeks + dec65plus + offset(log(population)), family = poisson(link = "log"))
+
+# 2 weeks before peak
+
+model3_alpha_zip_2weeks
+
+model3_delta_zip_2weeks
+
+tab_model(model3_alpha_zip_2weeks, model3_delta_zip_2weeks)
+
+# 8 weeks before peak
+
+model3_alpha_zip_8weeks
+
+model3_delta_zip_8weeks
+
+tab_model(model3_alpha_zip_8weeks, model3_delta_zip_8weeks)
 
 ```
 
