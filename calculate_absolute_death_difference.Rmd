@@ -1,0 +1,349 @@
+---
+title: "R&R for vaccine inequity project"
+output: html_notebook
+---
+```{r}
+library(tidyverse)
+```
+
+```{r}
+load("me_models.Rdata")
+
+alpha_data <- read_csv("alpha_data_for_me.csv")
+delta_data <- read_csv("delta_data_for_me.csv")
+```
+
+
+# Define vaccination groups and calculate pre-wave absolute cumulative death rates
+```{r vaccination_groups}
+vax_groups <- alpha_data %>%
+  group_by(zip) %>%
+  filter(row_number() ==1) %>%
+  arrange(alpha_vaxleveldec) %>%
+  mutate(vax_group = case_when(
+    alpha_vaxleveldec < 2.78 ~ "low",
+    alpha_vaxleveldec > 3.95 ~ "high",
+    TRUE ~ "intermediate"
+  )) %>%
+  select(zip, vax_group, alpha_vaxleveldec, population) %>%
+  left_join( delta_data %>%group_by(zip) %>%filter(row_number() ==1) %>% select(zip, delta_vaxleveldec)
+             )
+
+
+vax_groups_pop <- vax_groups%>%
+  group_by(vax_group) %>%
+  summarise(total_pop = sum(population), 
+            num_zips  = n(),
+            mean_vax_alpha = weighted.mean(alpha_vaxleveldec, population),
+            min_vax_alpha  = min(alpha_vaxleveldec),
+            max_vax_alpha = max(alpha_vaxleveldec),
+            mean_vax_delta = weighted.mean(delta_vaxleveldec, population),
+            min_vax_delta = min(delta_vaxleveldec),
+            max_vax_delta = max(delta_vaxleveldec))
+
+vax_groups_pop
+```
+
+```{r}
+covid_by_zip <- read_csv("covid_by_zip.csv")
+
+
+
+total_deaths_by_group_pre_alpha <- covid_by_zip %>%
+  select(`Deaths - Cumulative`, `Death Rate - Cumulative`, "Week Start", zip) %>%
+  mutate(zip = as.numeric(zip)) %>%
+  mutate(week_st =  lubridate::mdy(`Week Start`)) %>%
+  left_join(vax_groups) %>%
+  arrange(zip, week_st) %>%
+  filter(week_st == "2021-03-28" & is.na(vax_group) == FALSE) %>%
+  group_by(vax_group) %>%
+  summarise(total_deaths = sum(`Deaths - Cumulative`))
+```
+
+```{r}
+pop_least_quart <- 619518
+
+pre_alpha_low <- 100000*(total_deaths_by_group_pre_alpha %>%
+  filter(vax_group== "low") %>%
+  pull(total_deaths))/pop_least_quart
+
+pre_alpha_high <- 100000*(total_deaths_by_group_pre_alpha %>%
+  filter(vax_group== "high") %>%
+  pull(total_deaths))/484691
+```
+
+
+```{r}
+pre_alpha_low
+```
+
+
+```{r}
+pre_alpha_high
+```
+
+
+```{r}
+total_deaths_by_group_pre_delta <- covid_by_zip %>%
+  select(`Deaths - Cumulative`, `Death Rate - Cumulative`, "Week Start", zip) %>%
+  mutate(zip = as.numeric(zip)) %>%
+  mutate(week_st =  lubridate::mdy(`Week Start`)) %>%
+  left_join(vax_groups) %>%
+  arrange(zip, week_st) %>%
+  filter(week_st == "2021-08-01" & is.na(vax_group) == FALSE) %>%
+  group_by(vax_group) %>%
+  summarise(total_deaths = sum(`Deaths - Cumulative`))
+```
+
+```{r}
+pre_delta_low <- 100000*(total_deaths_by_group_pre_delta %>%
+  filter(vax_group== "low") %>%
+  pull(total_deaths))/pop_least_quart
+
+pre_delta_high <- 100000*(total_deaths_by_group_pre_delta %>%
+  filter(vax_group== "high") %>%
+  pull(total_deaths))/484691
+```
+
+```{r}
+pre_delta_low
+```
+
+```{r}
+pre_delta_high
+```
+
+
+# 95% CIF for deaths averted
+
+```{r did_CI_function}
+alpha_deaths_low <- 165
+alpha_deaths_high <-36
+
+did_95_ci <- function( diff_low, diff_high, pop_low = 619518, pop_high = 484691){
+  
+  rate_diff_high <- (diff_high/pop_high)
+  
+  deaths_low_cf <- pop_low*rate_diff_high
+  did <- round(diff_low - pop_low*rate_diff_high)
+  
+  se_high <- sqrt(rate_diff_high*(1-rate_diff_high)/(pop_high-1))
+  
+  deaths_low_cf_up <- rate_diff_high + 1.96*se_high
+  up_ci <- round(diff_low - pop_low*deaths_low_cf_up)
+   
+  deaths_low_cf_low <- rate_diff_high - 1.96*se_high
+  low_ci <- round(diff_low - pop_low*deaths_low_cf_low)
+  
+  out <- paste0("The difference in difference estimate for lives saved was ", 
+                did, " (95% CI ", up_ci, ", ", low_ci, "). The percentage of deaths that could have been averted was ", round(100*did/diff_low), "% (95% CI ",  round(100*up_ci/diff_low), "%, ", round(100*low_ci/diff_low), "%).")
+  
+  return(out)
+}
+
+# 100000*119/619518
+# 
+# 100000*165/619518
+# 
+# 
+# 100000*36/484691
+```
+
+## Alpha wave
+```{r did_CI_alpha}
+did_95_ci(165, 36)
+```
+
+
+
+## Delta wave
+```{r}
+did_95_ci(144,28)
+
+# 100000*144/619518
+# 
+# 100000*108/619518
+# 
+# 
+# 100000*28/484691
+```
+
+## Overall
+```{r}
+did_95_ci(342,68)
+```
+
+
+# ME poisson model equation
+
+$$ln(Y_i) - ln(Pop_i) = \beta_{0i} + \beta_1 * week + \beta_2*wave + \beta_3*(wave*vaccination)$$
+
+
+## Computing absolute change in death rate if vaccination rate increased from ME poisson model for alpha wave
+```{r}
+
+beta_alpha <- summary(model2_alpha_zip)$coefficients[,"Estimate"]
+beta_alpha_ci <- confint(model2_alpha_zip)
+
+death_diff <- function(rate_high, rate_low, pop_low = 619518,
+                       beta_0 = beta_alpha["(Intercept)"], 
+                       beta_1 = beta_alpha["week"], 
+                       beta_2 = beta_alpha["wave"], 
+                       beta_3 = beta_alpha["wave:alpha_vaxleveldec"],
+                       wave_start= 16, wave_end = 26){
+  
+  count_high_vax <- 0
+  count_low_vax <- 0
+  
+  for (week in seq(wave_start, wave_end)) {
+    ln_y_high <- log(pop_low) + beta_0 +  beta_1*week + beta_2 + beta_3*rate_high
+    
+    
+    ln_y_low <- log(pop_low) + beta_0 + beta_1*week + beta_2 + beta_3*rate_low
+    
+    count_high_vax <- count_high_vax + exp(ln_y_high) 
+    count_low_vax <- count_low_vax + exp(ln_y_low)
+  }
+   
+  return(
+    tibble(wave_deaths_high = count_high_vax,
+           wave_deaths_low = count_low_vax) %>%
+      mutate(death_diff_absolute = count_high_vax - count_low_vax)
+  )
+}
+```
+
+### point estimate
+```{r}
+
+cf_vax_rate <- 4.5
+observed_vax_rate <- 2
+
+wave_mortality_rates <- death_diff(observed_vax_rate, cf_vax_rate ) %>%
+  mutate_all(function(x) 100000*x/pop_least_quart)
+
+point_estimate <- death_diff(observed_vax_rate, cf_vax_rate ) %>% pull(death_diff_absolute) %>% round()
+
+death_diff(observed_vax_rate, cf_vax_rate )
+```
+
+
+### upper bound of vaccine effect
+```{r}
+dd_upper_bound <- death_diff(observed_vax_rate, cf_vax_rate , beta_3 = beta_alpha_ci["wave:alpha_vaxleveldec", 1])
+
+up_ci <- dd_upper_bound %>% pull(death_diff_absolute) %>% round()
+
+up_ci_rate <- round(100*(1- dd_upper_bound$wave_deaths_low/dd_upper_bound$wave_deaths_high))
+```
+
+## lower bound of vaccine effect
+```{r}
+dd_lower_bound <- death_diff(observed_vax_rate, cf_vax_rate , beta_3 = beta_alpha_ci["wave:alpha_vaxleveldec", 2])
+
+low_ci <- dd_lower_bound %>% pull(death_diff_absolute) %>% round()
+
+low_ci_rate <- round(100*dd_lower_bound$death_diff_absolute/dd_lower_bound$wave_deaths_high)
+
+dd_lower_bound
+
+#, preventing `r round(100*(wave_mortality_rates %>% pull(death_diff_absolute))/(wave_mortality_rates %>% pull(wave_deaths_high)))`% of deaths (95% CI `r low_ci_rate`%, `r up_ci_rate`%)
+```
+Adjusted for age and prior COVID infection, the absolute difference in deaths from increasing vaccination coverage in the lowest quartile of zip codes from 20% to 45% was `r point_estimate`, 95% CI (`r up_ci`, `r low_ci`)
+
+
+The model estimated that increasing vaccination coverage from `r round(observed_vax_rate*10)`% to `r round(cf_vax_rate*10)`% in the least vaccinated quartile before the alpha wave would have reduced the absolute wave mortality rate from `r wave_mortality_rates %>% pull(wave_deaths_high) %>% round()` to `r wave_mortality_rates %>% pull(wave_deaths_low) %>% round()` deaths per 100,000.
+
+
+## Delta wave
+```{r}
+beta_delta <- summary(model2_delta_zip)$coefficients[,"Estimate"]
+beta_delta_ci <- confint(model2_delta_zip)
+```
+
+
+```{r}
+
+delta_low_rate <- 4
+delta_high_rate <- 7
+
+beta_delta["wave:delta_vaxleveldec"]
+
+delta_results <- death_diff(delta_low_rate, delta_high_rate,
+           beta_0 = beta_delta["(Intercept)"], 
+           beta_1 = beta_delta["week"], 
+           beta_2 = beta_delta["wave"],
+           beta_3 =  beta_delta["wave:delta_vaxleveldec"],
+           wave_start = 13, wave_end = 25)
+
+delta_wave_death_rates<- delta_results %>%
+  mutate_all(function(x) 100000*x/pop_least_quart)
+
+delta_wave_death_rates
+```
+The model estimated that increasing vaccination coverage from `r delta_low_rate*10`% to `r delta_high_rate*10`% in the least vaccinated quartile six weeks prior to the delta wave would reduce the delta wave death rate from `r round(delta_wave_death_rates$wave_deaths_high, 1)` to `r round(delta_wave_death_rates$wave_deaths_low, 1)` deaths per 100,000.
+
+
+
+# sanity check- computing death difference at zip code level using full ME model
+
+## Model predictions for death rates based on observed vaccination rates
+```{r}
+wave_alpha_duration <- alpha_data %>%
+  filter(zip == 60601 & wave ==1) %>%
+  nrow()
+
+p_deaths_alpha <- predict(model3_alpha_zip, newdata = alpha_data, type = "response")
+
+
+observed <- alpha_data %>%
+  left_join(vax_groups) %>%
+  cbind(p_deaths_alpha) %>%
+  filter(wave ==1) %>% 
+  group_by(vax_group) %>%
+  summarise(absolute_wave_deaths = sum(p_deaths_alpha)) %>%
+  left_join(vax_groups_pop) %>%
+  mutate(wave_deate_rate_100k = 100000*(absolute_wave_deaths/total_pop),
+         weekly_death_rate_100k_wave = wave_deate_rate_100k/wave_alpha_duration) 
+
+
+
+deaths_low_observed <- observed %>% filter(vax_group == "low") %>% pull(absolute_wave_deaths) %>% round()
+```
+
+## Model predictions for death rates based on observed vaccination rates
+```{r}
+counter_factual_alpha <- alpha_data %>%
+  left_join(vax_groups) %>% 
+  mutate(alpha_vaxleveldec = ifelse(vax_group == "low", 4.5, alpha_vaxleveldec))
+
+p_deaths_alpha_cf <- predict(model3_alpha_zip, newdata = counter_factual_alpha, type = "response")
+
+counterfactual_low <- alpha_data %>%
+  left_join(vax_groups) %>%
+  cbind(p_deaths_alpha_cf) %>%
+  filter(wave ==1) %>% 
+  group_by(vax_group) %>%
+  summarise(absolute_wave_deaths_cf = sum(p_deaths_alpha_cf)) %>%
+  left_join(vax_groups_pop) %>%
+  mutate(wave_deate_rate_100k = 100000*(absolute_wave_deaths_cf/total_pop),
+         weekly_death_rate_100k_wave = wave_deate_rate_100k/wave_alpha_duration) 
+
+counterfactual_low
+
+
+deaths_low_cf <- counterfactual_low %>% filter(vax_group == "low") %>% pull(absolute_wave_deaths_cf) %>% round()
+
+zip_code_point_estimate <- deaths_low_observed - deaths_low_cf
+```
+
+Giving each zip code in the least vaccinated quartile a 40% vaccinated rate and applying the full mixed effects model leads to an estimated `r zip_code_point_estimate` difference in deaths
+
+```{r}
+#install.packages("merTools")
+
+
+#merTools::predictInterval(model3_alpha_zip, newdata = counter_factual_alpha, type = "probability")
+```
+
+
