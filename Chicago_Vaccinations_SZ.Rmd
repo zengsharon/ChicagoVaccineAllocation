@@ -823,6 +823,9 @@ citywidepct <- economics_social_merged %>%
 
 citywidenum
 citywidepct
+
+quantile(economics_social_merged$`Median Age (Years)`)
+quantile(economics_social_merged$`Median Household Income ($)`)
 ```
 
 ### TABLE 1: Demographics of vaccination groups
@@ -949,6 +952,27 @@ tochi2_alpha <- tochi_alpha %>%
 rownames(tochi2_alpha) <- n_labels_alpha
 
 chisq.test(tochi2_alpha)
+
+low <- economics_social_by_zip %>%
+  filter(vax_group_alpha == n_labels_alpha[1]) %>%
+  mutate(`Median Household Income ($)` = as.numeric (`Median Household Income ($)`))
+
+quantile(low$`Median Age (Years)`)
+quantile(low$`Median Household Income ($)`)
+
+mid <- economics_social_by_zip %>%
+  filter(vax_group_alpha == n_labels_alpha[2]) %>%
+  mutate(`Median Household Income ($)` = as.numeric (`Median Household Income ($)`))
+
+quantile(mid$`Median Age (Years)`)
+quantile(mid$`Median Household Income ($)`)
+
+high <- economics_social_by_zip %>%
+  filter(vax_group_alpha == n_labels_alpha[3]) %>%
+  mutate(`Median Household Income ($)` = as.numeric (`Median Household Income ($)`))
+
+quantile(high$`Median Age (Years)`)
+quantile(high$`Median Household Income ($)`)
 
 ```
 
@@ -1561,44 +1585,112 @@ model3_delta_zip
 
 ```{r models 2 and 3 in tables}
 
-# alpha zip
+# ALPHA, ZIP
 
 tab_model(model2_alpha_zip, model3_alpha_zip,
 title = "Table 2: Multivariable analysis of risk reduction in deaths from COVID-19, by vaccinations before alpha wave (alpha, zip)")
 
-tab_model(model2_alpha_zip, model3_alpha_zip, transform = NULL, show.ci = FALSE, show.se = TRUE)
+tab_model(model2_alpha_zip, model3_alpha_zip, transform = NULL, show.se = TRUE)
 
-paste("Wave IRR with mean vaccination level (Model 2 alpha zip):", (exp(fixef(model2_alpha_zip)[3] + 
-      fixef(model2_alpha_zip)[4]*mean(vaxlevel_zip_alpha$alpha_vaxleveldec))))
+# MODEL 2
 
 paste("Week IRR with mean vaccination level (Model 2 alpha zip):", exp(fixef(model2_alpha_zip)[2] + 
       fixef(model2_alpha_zip)[4]*mean(vaxlevel_zip_alpha$alpha_vaxleveldec)))
 
-paste("Wave IRR with mean vaccination level (Model 3 alpha zip):", (exp(fixef(model3_alpha_zip)[3] + 
-      fixef(model3_alpha_zip)[6]*mean(vaxlevel_zip_alpha$alpha_vaxleveldec))))
+# lower bound: 
+exp((-0.11-1.96*0.01) + 
+(fixef(model2_alpha_zip)[4]*mean(vaxlevel_zip_alpha$alpha_vaxleveldec)))
+
+# upper bound: 
+exp((-0.11+1.96*0.01) + 
+(fixef(model2_alpha_zip)[4]*mean(vaxlevel_zip_alpha$alpha_vaxleveldec)))
+
+paste("Wave IRR with mean vaccination level (Model 2 alpha zip):", (exp(fixef(model2_alpha_zip)[3] + 
+      fixef(model2_alpha_zip)[4]*mean(vaxlevel_zip_alpha$alpha_vaxleveldec))))
+
+# upper bound
+exp((2.41+1.96*0.28) + fixef(model2_alpha_zip)[4]*mean(vaxlevel_zip_alpha$alpha_vaxleveldec))
+
+# lower bound
+exp((2.41-1.96*0.28) + fixef(model2_alpha_zip)[4]*mean(vaxlevel_zip_alpha$alpha_vaxleveldec))
 
 paste("Week IRR with mean vaccination level (Model 3 alpha zip):", exp(fixef(model3_alpha_zip)[2] + 
       fixef(model3_alpha_zip)[6]*mean(vaxlevel_zip_alpha$alpha_vaxleveldec)))
 
-# delta zip
+#lower bound
+exp((-0.11-1.96*0.01) + 
+      (fixef(model3_alpha_zip)[6]*mean(vaxlevel_zip_alpha$alpha_vaxleveldec)))
+
+#upper bound
+exp((-0.11+1.96*0.01) + 
+      (fixef(model3_alpha_zip)[6]*mean(vaxlevel_zip_alpha$alpha_vaxleveldec)))
+
+# MODEL 3 
+
+paste("Wave IRR with mean vaccination level (Model 3 alpha zip):", (exp(fixef(model3_alpha_zip)[3] + 
+      fixef(model3_alpha_zip)[6]*mean(vaxlevel_zip_alpha$alpha_vaxleveldec))))
+
+# upper bound
+exp((2.39+1.96*0.27) + fixef(model3_alpha_zip)[6]*mean(vaxlevel_zip_alpha$alpha_vaxleveldec))
+
+# lower bound
+exp((2.39-1.96*0.27) + fixef(model3_alpha_zip)[6]*mean(vaxlevel_zip_alpha$alpha_vaxleveldec))
+
+# DELTA, ZIP 
 
 tab_model(model2_delta_zip, model3_delta_zip,
 title = "Table 2: Multivariable analysis of risk reduction in deaths from COVID-19, by vaccinations before delta wave (delta, zip)")
 
 tab_model(model2_delta_zip, model3_delta_zip, transform = NULL, show.ci = FALSE, show.se = TRUE)
 
-
-paste("Wave IRR with mean vaccination level (Model 2 delta zip):", (exp(fixef(model2_delta_zip)[3] + 
-      fixef(model2_delta_zip)[4]*mean(vaxlevel_zip_delta$delta_vaxleveldec))))
+# MODEL 2
 
 paste("Week IRR with mean vaccination level (Model 2 delta zip):", exp(fixef(model2_delta_zip)[2] + 
       fixef(model2_delta_zip)[4]*mean(vaxlevel_zip_delta$delta_vaxleveldec)))
 
-paste("Wave IRR with mean vaccination level (Model 3 delta zip):", (exp(fixef(model3_delta_zip)[3] + 
-      fixef(model3_delta_zip)[6]*mean(vaxlevel_zip_delta$delta_vaxleveldec))))
+# lower bound
+exp((-0.07-1.96*0.01) + 
+      fixef(model2_delta_zip)[4]*mean(vaxlevel_zip_delta$delta_vaxleveldec))
+
+# upper bound
+exp((-0.07+1.96*0.01) + 
+      fixef(model2_delta_zip)[4]*mean(vaxlevel_zip_delta$delta_vaxleveldec))
+
+paste("Wave IRR with mean vaccination level (Model 2 delta zip):", exp(fixef(model2_delta_zip)[3] + 
+      fixef(model2_delta_zip)[4]*mean(vaxlevel_zip_delta$delta_vaxleveldec)))
+
+# lower bound
+exp((2.62-1.96*0.43)+ 
+      fixef(model2_delta_zip)[4]*mean(vaxlevel_zip_delta$delta_vaxleveldec))
+
+# upper bound
+exp((2.62+1.96*0.43)+ 
+      fixef(model2_delta_zip)[4]*mean(vaxlevel_zip_delta$delta_vaxleveldec))
+
+# MODEL 3
 
 paste("Week IRR with mean vaccination level (Model 3 delta zip):", exp(fixef(model3_delta_zip)[2] + 
       fixef(model3_delta_zip)[6]*mean(vaxlevel_zip_delta$delta_vaxleveldec)))
+
+#lower bound
+exp((-0.07-1.96*0.01) + 
+      fixef(model3_delta_zip)[6]*mean(vaxlevel_zip_delta$delta_vaxleveldec))
+
+#upper bound
+exp((-0.07+1.96*0.01) + 
+      fixef(model3_delta_zip)[6]*mean(vaxlevel_zip_delta$delta_vaxleveldec))
+
+paste("Wave IRR with mean vaccination level (Model 3 delta zip):", (exp(fixef(model3_delta_zip)[3] + 
+      fixef(model3_delta_zip)[6]*mean(vaxlevel_zip_delta$delta_vaxleveldec))))
+
+#lower bound
+exp((2.62-1.96*0.42) + 
+      fixef(model3_delta_zip)[6]*mean(vaxlevel_zip_delta$delta_vaxleveldec))
+
+#upper bound
+exp((2.62+1.96*0.42) + 
+      fixef(model3_delta_zip)[6]*mean(vaxlevel_zip_delta$delta_vaxleveldec))
+
 
 ```
 
